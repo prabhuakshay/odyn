@@ -1,0 +1,27 @@
+# https://taskfile.dev
+
+version: '3'
+
+tasks:
+  lint:
+    desc: Run Ruff linter
+    cmds:
+      - uv run ruff check src tests --fix
+      - uv run ruff format src tests
+
+  typecheck:
+    desc: Run Pyrefly type checker
+    cmds:
+      - uv run pyrefly check
+
+  test:
+    desc: Run pytest with coverage
+    cmds:
+      - uv run pytest
+
+  check:
+    desc: Run all checks (lint, typecheck, test)
+    cmds:
+      - task: lint
+      - task: typecheck
+      - task: test
