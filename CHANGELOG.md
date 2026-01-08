@@ -2,9 +2,10 @@
 
 All notable changes to Odyn will be documented in this file.
 
-## [0.1.0] - 2026-01-08
+## [0.2.0] - 2026-01-09
 
 Initial release of Odyn: A modern, async-first Python client for Business Central OData Web Services.
+Skipping `0.1.0` since another package with that package existed and since has been deleted.
 
 ### Added
 
