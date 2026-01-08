@@ -2,6 +2,7 @@
 
 import base64
 
+import httpx
 import pytest
 
 from odyn.auth import BasicAuth
@@ -79,3 +80,16 @@ class TestBasicAuth:
         """BasicAuth accepts empty password."""
         auth = BasicAuth("user", "")
         assert auth.password == ""
+
+    def test_apply_adds_header(self):
+        """apply method adds Authorization header to httpx Request."""
+        auth = BasicAuth("user", "password123")
+        request = httpx.Request("GET", "https://example.com")
+
+        assert "Authorization" not in request.headers
+
+        updated_request = auth.apply(request)
+
+        assert updated_request is request
+        assert "Authorization" in request.headers
+        assert request.headers["Authorization"].startswith("Basic ")

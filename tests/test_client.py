@@ -1,7 +1,21 @@
 """Tests for the odyn.client module."""
 
+import asyncio
+import logging
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+import polars as pl
+import pytest
+
 from odyn.auth import BasicAuth
 from odyn.client import BCWebServiceClient
+from odyn.exceptions import (
+    NotFoundError,
+    RateLimitError,
+    ValidationError,
+    WebServiceError,
+)
 
 
 class TestBCWebServiceClientCreate:
@@ -226,3 +240,538 @@ class TestBCWebServiceClientCacheHelpers:
             auth=BasicAuth("user", "pass"),
         )
         assert client.cleanup_cache() == 0
+
+
+class TestBCWebServiceClientResponse:
+    """Tests for _handle_response and related error handling."""
+
+    @pytest.fixture
+    def client(self):
+        return BCWebServiceClient.create(
+            server="https://bc-server",
+            instance="BC",
+            auth=BasicAuth("user", "pass"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_handle_response_204(self, client):
+        """204 No Content returns empty dict."""
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.is_success = True
+        mock_response.status_code = 204
+
+        result = await client._handle_response(mock_response, "http://test")
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_handle_response_json_error(self, client):
+        """Handles invalid JSON in error response."""
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.is_success = False
+        mock_response.status_code = 400
+        mock_response.text = "Not JSON"
+        mock_response.json.side_effect = ValueError("Invalid JSON")
+        mock_response.reason_phrase = "Bad Request"
+
+        with pytest.raises(ValidationError) as exc:
+            await client._handle_response(mock_response, "http://test")
+        assert exc.value.message == "Not JSON"
+
+    @pytest.mark.asyncio
+    async def test_handle_response_rate_limit_no_header(self, client):
+        """Handles 429 without Retry-After header."""
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.is_success = False
+        mock_response.status_code = 429
+        mock_response.headers = {}
+        mock_response.text = '{"error": {"message": "Too Many"}}'
+        mock_response.json.return_value = {"error": {"message": "Too Many"}}
+
+        with pytest.raises(RateLimitError) as exc:
+            await client._handle_response(mock_response, "http://test")
+        assert exc.value.retry_after is None
+
+    @pytest.mark.asyncio
+    async def test_handle_response_unexpected_error(self, client):
+        """Handles unexpected error codes."""
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.is_success = False
+        mock_response.status_code = 418  # I'm a teapot
+        mock_response.text = "Teapot"
+        mock_response.json.side_effect = ValueError()
+        mock_response.reason_phrase = "Teapot"
+
+        with pytest.raises(WebServiceError):
+            await client._handle_response(mock_response, "http://test")
+
+    def test_extract_error_message_non_dict(self, client):
+        """_extract_error_message handles non-dict odata_error."""
+        # This covers line 426: return fallback
+        assert client._extract_error_message("not a dict", "fallback") == "fallback"
+
+
+class TestBCWebServiceClientHighLevel:
+    """Tests for high-level convenience methods in BCWebServiceClient."""
+
+    @pytest.fixture
+    def client(self):
+        return BCWebServiceClient.create(
+            server="https://bc-server",
+            instance="BC",
+            auth=BasicAuth("user", "pass"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_all(self, client):
+        """get_all calls get with correct query."""
+        import polars as pl
+
+        mock_df = pl.DataFrame({"No": ["C001"]})
+        with patch.object(client, "get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_df
+            result = await client.get_all("customers", batch_size=500)
+
+            assert result is mock_df
+            mock_get.assert_called_once()
+            query = mock_get.call_args[1]["query"]
+            assert query._top == 500
+
+    @pytest.mark.asyncio
+    async def test_get_first(self, client):
+        """get_first returns first row as dict."""
+        import polars as pl
+
+        mock_df = pl.DataFrame({"No": ["C001"], "Name": ["John"]})
+        with patch.object(client, "get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_df
+            result = await client.get_first("customers")
+
+            assert result == {"No": "C001", "Name": "John"}
+
+    @pytest.mark.asyncio
+    async def test_get_first_empty(self, client):
+        """get_first returns None if no records."""
+        import polars as pl
+
+        mock_df = pl.DataFrame()
+        with patch.object(client, "get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_df
+            result = await client.get_first("customers")
+
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_exists_true(self, client):
+        """exists returns True if record found."""
+        with patch.object(client, "get_by_key", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = {"SystemId": "abc"}
+            assert await client.exists("customers", "C001") is True
+
+    @pytest.mark.asyncio
+    async def test_exists_false(self, client):
+        """exists returns False if NotFoundError raised."""
+        with patch.object(client, "get_by_key", new_callable=AsyncMock) as mock_get:
+            mock_get.side_effect = NotFoundError("Not found", status_code=404)
+            assert await client.exists("customers", "C001") is False
+
+    @pytest.mark.asyncio
+    async def test_get_by_id(self, client):
+        """get_by_id calls _request with correct URL."""
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_request:
+            mock_request.return_value = {"No": "C001"}
+            guid = "12345678-1234-1234-1234-123456789012"
+            result = await client.get_by_id("customers", guid, select=["No"])
+
+            assert result == {"No": "C001"}
+            mock_request.assert_called_once()
+            args = mock_request.call_args
+            assert f"customers({guid})" in args[0][1]
+            assert args[1]["params"] == {"$select": "No"}
+
+    @pytest.mark.asyncio
+    async def test_get_endpoints(self, client):
+        """get_endpoints parses service document."""
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_request:
+            mock_request.return_value = {
+                "value": [
+                    {"name": "customers", "url": "..."},
+                    {"name": "vendors", "url": "..."},
+                    {"name": "", "url": "..."},  # Skip empty names
+                ]
+            }
+            endpoints = await client.get_endpoints()
+            assert endpoints == ["customers", "vendors"]
+
+    @pytest.mark.asyncio
+    async def test_context_manager(self, client):
+        """Async context manager closes client."""
+        client._http = MagicMock(spec=httpx.AsyncClient)
+        client._http.aclose = AsyncMock()
+
+        async with client as c:
+            assert c is client
+
+        client._http.aclose.assert_called_once()
+
+
+class TestBCWebServiceClientPagination:
+    """Tests for pagination and streaming logic."""
+
+    @pytest.fixture
+    def client(self):
+        return BCWebServiceClient.create(
+            server="https://bc-server",
+            instance="BC",
+            auth=BasicAuth("user", "pass"),
+            max_pages=2,
+        )
+
+    @pytest.mark.asyncio
+    async def test_paginate_multiple_pages(self, client):
+        """_paginate follows nextLink."""
+
+        async def mock_fetch_page(url, params=None):
+            if "page1" in url or url.endswith("customers"):
+                return {"value": [{"No": "C1"}], "@odata.nextLink": "http://bc-server/page2"}
+            return {"value": [{"No": "C2"}]}
+
+        with patch.object(client, "_fetch_page", side_effect=mock_fetch_page):
+            df = await client._paginate("customers")
+            assert len(df) == 2
+            assert df["No"].to_list() == ["C1", "C2"]
+
+    @pytest.mark.asyncio
+    async def test_paginate_limit_reached(self, client):
+        """_paginate stops at max_pages."""
+
+        async def mock_fetch_page(url, params=None):
+            return {"value": [{"No": "C"}], "@odata.nextLink": "http://bc-server/next"}
+
+        with patch.object(client, "_fetch_page", side_effect=mock_fetch_page):
+            # client.max_pages is set to 2 in fixture
+            df = await client._paginate("customers")
+            assert len(df) == 2
+
+    @pytest.mark.asyncio
+    async def test_paginate_empty(self, client):
+        """_paginate returns empty DF if no records."""
+        with patch.object(client, "_fetch_page", new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = {"value": []}
+            df = await client._paginate("customers")
+            assert df.is_empty()
+
+    @pytest.mark.asyncio
+    async def test_get_stream(self, client):
+        """get_stream yields pages."""
+
+        async def mock_fetch_page(url, params=None):
+            if "page1" in url or url.endswith("customers"):
+                return {"value": [{"No": "C1"}], "@odata.nextLink": "http://bc-server/page2"}
+            return {"value": [{"No": "C2"}]}
+
+        with patch.object(client, "_fetch_page", side_effect=mock_fetch_page):
+            pages = [page async for page in client.get_stream("customers")]
+
+            assert len(pages) == 2
+            assert pages[0]["No"][0] == "C1"
+            assert pages[1]["No"][0] == "C2"
+
+    @pytest.mark.asyncio
+    async def test_count(self, client):
+        """count returns integer from $count endpoint."""
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_request:
+            mock_request.return_value = "42"
+            val = await client.count("customers")
+            assert val == 42
+            assert "/$count" in mock_request.call_args[0][1]
+
+    @pytest.mark.asyncio
+    async def test_count_with_filter(self, client):
+        """count preserves only $filter param."""
+        from odyn.query import F, ODataQuery
+
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_request:
+            mock_request.return_value = "10"
+            query = ODataQuery().filter(F.No == "C1").select("No").top(1)
+            await client.count("customers", query=query)
+
+            params = mock_request.call_args[1]["params"]
+            assert "$filter" in params
+            assert "$select" not in params
+            assert "$top" not in params
+
+    @pytest.mark.asyncio
+    async def test_count_invalid_response(self, client):
+        """count returns 0 if response is not a string."""
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_request:
+            mock_request.return_value = {"not": "a string"}
+            assert await client.count("customers") == 0
+
+
+class TestBCWebServiceClientRequestLogic:
+    """Tests for core request logic and error handling in _request."""
+
+    @pytest.fixture
+    def client(self):
+        return BCWebServiceClient.create(
+            server="https://bc-server",
+            instance="BC",
+            auth=BasicAuth("user", "pass"),
+            rate_limit=None,
+            max_retries=0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_request_connect_error(self, client):
+        """_request handles httpx.ConnectError."""
+        from odyn.exceptions import RetryExhaustedError
+
+        with (
+            patch.object(client._http, "request", side_effect=httpx.ConnectError("fail")),
+            pytest.raises(RetryExhaustedError),
+        ):
+            await client._request("GET", "http://test")
+
+    @pytest.mark.asyncio
+    async def test_request_ssl_error(self, client):
+        """_request handles SSL errors."""
+        from odyn.exceptions import SSLError as OdynSSLError
+
+        with (
+            patch.object(client._http, "request", side_effect=Exception("SSL error")),
+            pytest.raises(OdynSSLError),
+        ):
+            await client._request("GET", "http://test")
+
+    @pytest.mark.asyncio
+    async def test_request_generic_error(self, client):
+        """_request re-raises non-retryable generic errors."""
+        with (
+            patch.object(client._http, "request", side_effect=RuntimeError("generic")),
+            pytest.raises(RuntimeError, match="generic"),
+        ):
+            await client._request("GET", "http://test")
+
+    @pytest.mark.asyncio
+    async def test_get_cache_hit(self, client, tmp_path):
+        """get returns cached result if available."""
+        import polars as pl
+
+        client.cache = MagicMock()
+        mock_df = pl.DataFrame({"No": ["C1"]})
+        client.cache.get.return_value = mock_df
+
+        result = await client.get("customers", use_cache=True)
+        assert result is mock_df
+        client.cache.get.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_page_no_paginate(self, client):
+        """get(paginate=False) fetches single page."""
+        with patch.object(client, "_fetch_page", new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = {"value": [{"No": "C1"}]}
+            df = await client.get("customers", paginate=False)
+            assert len(df) == 1
+            assert df["No"][0] == "C1"
+
+    @pytest.mark.asyncio
+    async def test_get_page_no_paginate_empty(self, client):
+        """get(paginate=False) handles empty results."""
+        with patch.object(client, "_fetch_page", new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = {"value": []}
+            df = await client.get("customers", paginate=False)
+            assert df.is_empty()
+
+
+class TestBCWebServiceClientBatchOptions:
+    """Tests for get_batch options (expand, additional_filter, etc)."""
+
+    @pytest.fixture
+    def client(self):
+        return BCWebServiceClient.create(
+            server="https://bc-server",
+            instance="BC",
+            auth=BasicAuth("user", "pass"),
+            rate_limit=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_batch_full_options(self, client):
+        """get_batch handles expand, order_by, additional_filter."""
+        import polars as pl
+
+        from odyn.query import F
+
+        mock_df = pl.DataFrame({"No": ["C1"]})
+        with patch.object(client, "get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_df
+            await client.get_batch(
+                "customers",
+                "No",
+                ["C1"],
+                expand=["ShipToAddress"],
+                order_by=["Name desc"],
+                additional_filter=(F.Blocked == False),  # noqa: E712
+            )
+
+            mock_get.assert_called_once()
+            query = mock_get.call_args[1]["query"]
+            assert "ShipToAddress" in query._expand
+            assert "Name desc" in query._order_by
+            params = query.build()
+            assert "Blocked eq false" in params["$filter"]
+
+    @pytest.mark.asyncio
+    async def test_get_batch_handles_exceptions(self, client):
+        """get_batch handles exceptions for individual batches when fail_fast=False."""
+        import polars as pl
+
+        mock_df = pl.DataFrame({"No": ["C1"]})
+
+        async def mock_get(*args, **kwargs):
+            if "C2" in str(kwargs.get("query")):
+                raise RuntimeError("Batch failed")
+            return mock_df
+
+        with patch.object(client, "get", side_effect=mock_get):
+            # 2 batches
+            result = await client.get_batch("customers", "No", ["C1", "C2"], batch_size=1, fail_fast=False)
+            assert len(result) == 1  # Only one batch succeeded
+
+    @pytest.mark.asyncio
+    async def test_get_batch_all_failed(self, client):
+        """get_batch returns empty DF if all batches fail."""
+        with patch.object(client, "get", side_effect=RuntimeError("fail")):
+            result = await client.get_batch("customers", "No", ["C1"], fail_fast=False)
+            assert result.is_empty()
+
+    @pytest.mark.asyncio
+    async def test_paginate_stream_exit_by_limit(self, client):
+        """_paginate_stream exit by max_pages limit."""
+        client.max_pages = 1
+        with patch.object(client, "_fetch_page", new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = {"value": [{"No": "C1"}], "@odata.nextLink": "http://bc-server/page2"}
+            pages = [page async for page in client._paginate_stream("http://test")]
+            assert len(pages) == 1
+
+
+class TestBCWebServiceClientMisc:
+    """Tests for remaining miscellaneous client logic."""
+
+    @pytest.fixture
+    def client(self):
+        return BCWebServiceClient.create(
+            server="https://bc-server",
+            instance="BC",
+            auth=BasicAuth("user", "pass"),
+        )
+
+    def test_configure_logging_custom_format(self):
+        """_configure_logging with custom format."""
+        from odyn.client import _configure_logging
+
+        _configure_logging(logging.DEBUG, format_string="%(message)s")
+        # Just verifying it doesn't crash as we can't easily check side-effects on global loggers
+
+    @pytest.mark.asyncio
+    async def test_get_by_key_no_select(self, client):
+        """get_by_key without select."""
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_request:
+            mock_request.return_value = {"No": "C1"}
+            await client.get_by_key("customers", "C1")
+            assert mock_request.call_args[1]["params"] is None
+
+    @pytest.mark.asyncio
+    async def test_get_by_key_with_select(self, client):
+        """get_by_key with select."""
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_request:
+            mock_request.return_value = {"No": "C1"}
+            await client.get_by_key("customers", "C1", select=["No", "Name"])
+            assert mock_request.call_args[1]["params"] == {"$select": "No,Name"}
+
+    @pytest.mark.asyncio
+    async def test_apply_rate_limit_not_triggered(self, client):
+        """_apply_rate_limit does not trigger sleep when last request was long ago."""
+        client.rate_limit = 100.0
+        client._last_request_time = asyncio.get_event_loop().time() - 1.0
+
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await client._apply_rate_limit()
+            mock_sleep.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_by_id_no_select(self, client):
+        """get_by_id without select."""
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_request:
+            mock_request.return_value = {"No": "C1"}
+            await client.get_by_id("customers", "id")
+            assert mock_request.call_args[1]["params"] is None
+
+    @pytest.mark.asyncio
+    async def test_fetch_page_coverage(self, client):
+        """_fetch_page calls _request."""
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_request:
+            await client._fetch_page("http://test")
+            mock_request.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_paginate_stream_no_records(self, client):
+        """_paginate_stream handles empty results."""
+        with patch.object(client, "_fetch_page", new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = {"value": []}
+            pages = [page async for page in client._paginate_stream("customers")]
+            assert len(pages) == 0
+
+    @pytest.mark.asyncio
+    async def test_get_no_cache_available(self, client):
+        """get when cache is None."""
+        client.cache = None
+        with patch.object(client, "_paginate", new_callable=AsyncMock) as mock_paginate:
+            mock_paginate.return_value = pl.DataFrame({"No": ["C1"]})
+            await client.get("customers", use_cache=True)
+            # Should just work
+
+    @pytest.mark.asyncio
+    async def test_get_cache_miss_and_store(self, client, tmp_path):
+        """get handles cache miss and stores result."""
+        client.cache = MagicMock()
+        client.cache.get.return_value = None
+
+        mock_df = pl.DataFrame({"No": ["C1"]})
+        with patch.object(client, "_paginate", new_callable=AsyncMock) as mock_paginate:
+            mock_paginate.return_value = mock_df
+            await client.get("customers", use_cache=True)
+
+            client.cache.get.assert_called_once()
+            client.cache.set.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_no_paginate_one_record(self, client):
+        """get(paginate=False) with one record."""
+        with patch.object(client, "_fetch_page", new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = {"value": [{"No": "C1"}]}
+            df = await client.get("customers", paginate=False)
+            assert not df.is_empty()
+
+    @pytest.mark.asyncio
+    async def test_get_no_paginate_no_records(self, client):
+        """get(paginate=False) with no records."""
+        with patch.object(client, "_fetch_page", new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = {"value": []}
+            df = await client.get("customers", paginate=False)
+            assert df.is_empty()
+
+    def test_clear_and_cleanup_cache_with_cache(self, client):
+        """clear_cache and cleanup_cache call cache methods."""
+        client.cache = MagicMock()
+        client.cache.clear.return_value = 5
+        client.cache.cleanup.return_value = 3
+
+        assert client.clear_cache() == 5
+        assert client.cleanup_cache() == 3
+
+    def test_cache_size_with_cache(self, client):
+        """cache_size calls cache.size()."""
+        client.cache = MagicMock()
+        client.cache.size.return_value = 10
+        assert client.cache_size == 10
