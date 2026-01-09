@@ -28,8 +28,8 @@ Factory method to create a new client instance.
 | `log_level` | `int` | `logging.INFO` | Logging level for the client. |
 | `max_retries` | `int` | `3` | Maximum number of retry attempts for transient errors. |
 | `retry_backoff` | `float` | `1.0` | Initial delay for exponential backoff. |
-| `max_connections` | `int` | `5` | Maximum number of concurrent connections in the pool. |
-| `rate_limit` | `float \| None` | `10.0` | Target requests per second. Set to `None` to disable. |
+| `max_connections` | `int` | `4` | Maximum number of concurrent connections in the pool. |
+| `rate_limit` | `float \| None` | `550.0` | Target requests per minute. Set to `None` to disable. |
 
 **Returns:** `BCWebServiceClient`
 

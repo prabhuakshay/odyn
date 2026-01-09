@@ -60,7 +60,7 @@ For extremely large datasets that might not fit comfortably in memory, use `get_
 Odyn includes built-in features to make your integrations more robust:
 
 1. **Retries**: Automatically retries requests that fail due to network timeouts, connection issues, or transient server errors (5xx). It uses exponential backoff to avoid hammering the server.
-2. **Rate Limiting**: Throttles outgoing requests to a specified number of requests per second (RPS) to comply with server-side throughput limits.
+2. **Rate Limiting**: Throttles outgoing requests using aiolimiter (token bucket algorithm) to a specified number of requests per minute (RPM) to comply with server-side throughput limits. Default is 550 requests per minute.
 3. **Concurrency Control**: Limits the number of concurrent outgoing requests to prevent overwhelming the Business Central instance and to manage connection pooling efficiently.
 
 ## Advanced Fetching

@@ -7,7 +7,6 @@ This module tests the resilience features of BCWebServiceClient:
 - Exception handling for retryable errors
 """
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -69,13 +68,13 @@ class TestClientResilienceConfig:
         assert client.retry_backoff == 0.5
 
     def test_create_default_max_connections(self):
-        """create() uses default max_connections of 5."""
+        """create() uses default max_connections of 4."""
         client = BCWebServiceClient.create(
             server="https://bc-server:7048",
             instance="BC210",
             auth=BasicAuth("user", "pass"),
         )
-        assert client.max_connections == 5
+        assert client.max_connections == 4
 
     def test_create_custom_max_connections(self):
         """create() accepts custom max_connections."""
@@ -88,13 +87,13 @@ class TestClientResilienceConfig:
         assert client.max_connections == 10
 
     def test_create_default_rate_limit(self):
-        """create() uses default rate_limit of 10.0."""
+        """create() uses default rate_limit of 550.0 requests per minute."""
         client = BCWebServiceClient.create(
             server="https://bc-server:7048",
             instance="BC210",
             auth=BasicAuth("user", "pass"),
         )
-        assert client.rate_limit == 10.0
+        assert client.rate_limit == 550.0
 
     def test_create_custom_rate_limit(self):
         """create() accepts custom rate_limit."""
@@ -102,9 +101,9 @@ class TestClientResilienceConfig:
             server="https://bc-server:7048",
             instance="BC210",
             auth=BasicAuth("user", "pass"),
-            rate_limit=5.0,
+            rate_limit=300.0,
         )
-        assert client.rate_limit == 5.0
+        assert client.rate_limit == 300.0
 
     def test_create_disable_rate_limit(self):
         """create() can disable rate limiting with None."""
@@ -477,45 +476,62 @@ class TestRetryBehavior:
 
 
 class TestRateLimiting:
-    """Tests for rate limiting behavior."""
+    """Tests for rate limiting behavior using aiolimiter."""
 
-    @pytest.mark.asyncio
-    async def test_rate_limit_applies_delay(self):
-        """Rate limiting adds delay between requests."""
+    def test_rate_limiter_initialized_when_enabled(self):
+        """Rate limiter is initialized when rate_limit is set."""
         client = BCWebServiceClient.create(
             server="https://bc-server:7048",
             instance="BC210",
             auth=BasicAuth("user", "pass"),
-            rate_limit=100.0,  # 100 req/s = 10ms between requests
+            rate_limit=600.0,  # 600 req/min
         )
+        assert client._limiter is not None
+        # AsyncLimiter stores max_rate and time_period
+        assert client._limiter.max_rate == 600.0
+        assert client._limiter.time_period == 60.0
 
-        # Manually set last request time
-        loop = asyncio.get_event_loop()
-        client._last_request_time = loop.time()
-
-        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            await client._apply_rate_limit()
-
-        # Should have been called with some positive value
-        mock_sleep.assert_called_once()
-        call_args = mock_sleep.call_args[0][0]
-        assert call_args > 0
-        assert call_args <= 0.01  # 10ms max
-
-    @pytest.mark.asyncio
-    async def test_rate_limit_disabled_no_delay(self):
-        """Disabled rate limiting adds no delay."""
+    def test_rate_limiter_none_when_disabled(self):
+        """Rate limiter is None when rate_limit is None."""
         client = BCWebServiceClient.create(
             server="https://bc-server:7048",
             instance="BC210",
             auth=BasicAuth("user", "pass"),
-            rate_limit=None,  # Disabled
+            rate_limit=None,
+        )
+        assert client._limiter is None
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_acquires_token(self):
+        """Rate limiting acquires a token from the limiter."""
+        client = BCWebServiceClient.create(
+            server="https://bc-server:7048",
+            instance="BC210",
+            auth=BasicAuth("user", "pass"),
+            rate_limit=600.0,  # 600 req/min = 10 req/s
         )
 
-        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        with patch.object(client._limiter, "acquire", new_callable=AsyncMock) as mock_acquire:
             await client._apply_rate_limit()
 
-        mock_sleep.assert_not_called()
+        mock_acquire.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_disabled_skips_acquire(self):
+        """Disabled rate limiting doesn't acquire any token."""
+        client = BCWebServiceClient.create(
+            server="https://bc-server:7048",
+            instance="BC210",
+            auth=BasicAuth("user", "pass"),
+            rate_limit=None,
+        )
+
+        # No limiter should exist
+        assert client._limiter is None
+
+        # Calling _apply_rate_limit should be a no-op
+        # It should complete immediately without error
+        await client._apply_rate_limit()
 
 
 class TestConcurrencyLimits:

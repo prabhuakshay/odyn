@@ -2,6 +2,20 @@
 
 All notable changes to Odyn will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **Rate limiting**: Replaced custom rate limiting implementation with `aiolimiter` (token bucket algorithm).
+  - Rate limit is now specified in **requests per minute** instead of requests per second.
+  - Default rate limit changed from 10 req/s to **550 req/min** (~9.17 req/s).
+  - Default max concurrent connections changed from 5 to **4**.
+  - Uses `aiolimiter.AsyncLimiter` for more accurate and efficient rate limiting.
+
+### Dependencies
+
+- Added `aiolimiter>=1.2.1` as a core dependency.
+
 ## [0.2.0] - 2026-01-09
 
 Initial release of Odyn: A modern, async-first Python client for Business Central OData Web Services.

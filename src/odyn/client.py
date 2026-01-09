@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING, Any, Self
 
 import httpx
 import polars as pl
+from aiolimiter import AsyncLimiter
 
 from odyn.cache import ParquetCache
 from odyn.exceptions import (
@@ -122,8 +123,8 @@ class BCWebServiceClient:
         cache: Optional ParquetCache for query result caching.
         max_retries: Maximum retry attempts for transient failures (default: 3).
         retry_backoff: Base delay in seconds for exponential backoff (default: 1.0).
-        max_connections: Maximum concurrent connections (default: 5).
-        rate_limit: Maximum requests per second (default: 10.0, None to disable).
+        max_connections: Maximum concurrent connections (default: 4).
+        rate_limit: Maximum requests per minute (default: 550, None to disable).
 
     Example:
         >>> async with BCWebServiceClient.create(
@@ -148,13 +149,12 @@ class BCWebServiceClient:
     retry_backoff: float = 1.0
 
     # Concurrency and rate limiting
-    max_connections: int = 5
-    rate_limit: float | None = 10.0  # requests per second
+    max_connections: int = 4
+    rate_limit: float | None = 550.0  # requests per minute (default: 550/min)
 
     _http: httpx.AsyncClient = field(init=False, repr=False)
     _semaphore: asyncio.Semaphore = field(init=False, repr=False)
-    _rate_limit_lock: asyncio.Lock = field(init=False, repr=False)
-    _last_request_time: float = field(init=False, repr=False, default=0.0)
+    _limiter: AsyncLimiter | None = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Initialize the HTTP client with connection limits."""
@@ -177,8 +177,12 @@ class BCWebServiceClient:
 
         # Initialize concurrency controls
         self._semaphore = asyncio.Semaphore(self.max_connections)
-        self._rate_limit_lock = asyncio.Lock()
-        self._last_request_time = 0.0
+
+        # Initialize rate limiter (requests per minute)
+        if self.rate_limit is not None:
+            self._limiter = AsyncLimiter(self.rate_limit, 60.0)
+        else:
+            self._limiter = None
 
         logger.info(
             "Client initialized: base_url=%s, company=%s, verify_ssl=%s, "
@@ -188,7 +192,7 @@ class BCWebServiceClient:
             self.verify_ssl,
             self.max_retries,
             self.max_connections,
-            f"{self.rate_limit} req/s" if self.rate_limit else "disabled",
+            f"{self.rate_limit} req/min" if self.rate_limit else "disabled",
         )
 
     @classmethod
@@ -207,8 +211,8 @@ class BCWebServiceClient:
         log_level: int = logging.INFO,
         max_retries: int = 3,
         retry_backoff: float = 1.0,
-        max_connections: int = 5,
-        rate_limit: float | None = 10.0,
+        max_connections: int = 4,
+        rate_limit: float | None = 550.0,
     ) -> BCWebServiceClient:
         r"""Create a client for Business Central on-premises web services.
 
@@ -232,12 +236,12 @@ class BCWebServiceClient:
                          rate limits (429), and server errors (5xx).
             retry_backoff: Base delay in seconds for exponential backoff (default: 1.0).
                            Actual delay = backoff * (2 ** attempt) + jitter.
-            max_connections: Maximum concurrent connections to the server (default: 5).
-                             Business Central on-premises typically handles 5-10
+            max_connections: Maximum concurrent connections to the server (default: 4).
+                             Business Central on-premises typically handles 4-10
                              concurrent connections well.
-            rate_limit: Maximum requests per second (default: 10.0).
+            rate_limit: Maximum requests per minute (default: 550).
                         Set to None to disable rate limiting.
-                        Default of 10 req/s is conservative for BC on-premises.
+                        Default of 550 req/min is conservative for BC on-premises.
 
         Returns:
             Configured BCWebServiceClient instance.
@@ -252,7 +256,7 @@ class BCWebServiceClient:
             ...     cache_dir="~/.cache/odyn",
             ...     cache_ttl=3600,  # 1 hour
             ...     max_retries=5,  # More retries for flaky networks
-            ...     rate_limit=5.0,  # Slower rate for busy servers
+            ...     rate_limit=300.0,  # Slower rate for busy servers (300 req/min)
             ... )
         """
         _configure_logging(log_level)
@@ -429,22 +433,11 @@ class BCWebServiceClient:
         """Apply rate limiting by waiting if necessary.
 
         This ensures requests don't exceed the configured rate limit.
-        Uses a lock to prevent race conditions when tracking time.
+        Uses aiolimiter's AsyncLimiter for efficient token bucket rate limiting.
         """
-        if self.rate_limit is None:
-            return
-
-        async with self._rate_limit_lock:
-            now = asyncio.get_event_loop().time()
-            min_interval = 1.0 / self.rate_limit
-            elapsed = now - self._last_request_time
-
-            if elapsed < min_interval:
-                wait_time = min_interval - elapsed
-                logger.debug("Rate limiting: waiting %.3fs", wait_time)
-                await asyncio.sleep(wait_time)
-
-            self._last_request_time = asyncio.get_event_loop().time()
+        if self._limiter is not None:
+            await self._limiter.acquire()
+            logger.debug("Rate limit: acquired token")
 
     def _is_retryable(self, exc: Exception) -> bool:
         """Check if an exception is retryable.

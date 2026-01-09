@@ -16,7 +16,7 @@ Integrating with Business Central Web Services often involves significant boiler
 * Polars Integration: Native support for Polars DataFrames for efficient data processing.
 * Query Builder: Type-safe OData query builder with support for filters, expansions, and ordering.
 * Caching: Persistent Parquet-based caching with configurable TTL to reduce API load.
-* Resilience: Automatic retries with exponential backoff and configurable rate limiting.
+* Resilience: Automatic retries with exponential backoff and configurable rate limiting (via aiolimiter).
 * Data Handling: Automatic pagination, streaming, and efficient batching for large datasets.
 
 ## Dependencies
@@ -24,6 +24,7 @@ Integrating with Business Central Web Services often involves significant boiler
 * Python 3.12+
 * httpx
 * polars
+* aiolimiter
 
 ## Installation
 
