@@ -871,3 +871,123 @@ class TestCacheIntegration:
         removed = cache.cleanup()
         assert removed == 1
         assert cache.size() == 1
+
+
+# =============================================================================
+# stats() Method Tests
+# =============================================================================
+
+
+class TestStatsMethod:
+    """Test suite for ParquetCache.stats() method.
+
+    stats() returns cache statistics including hits, misses, and disk usage.
+    """
+
+    @pytest.fixture
+    def cache(self, tmp_path: Path) -> ParquetCache:
+        """Create a cache instance for testing."""
+        return ParquetCache(tmp_path / "cache")
+
+    @pytest.fixture
+    def sample_df(self) -> pl.DataFrame:
+        """Create a sample DataFrame for testing."""
+        return pl.DataFrame({"id": [1, 2, 3], "name": ["Alice", "Bob", "Charlie"]})
+
+    def test_stats_initial_values(self, cache: ParquetCache) -> None:
+        """Validate that stats start at zero."""
+        stats = cache.stats()
+        assert stats["hits"] == 0
+        assert stats["misses"] == 0
+        assert stats["disk_bytes"] == 0
+
+    def test_stats_tracks_hits(self, cache: ParquetCache, sample_df: pl.DataFrame) -> None:
+        """Validate that cache hits increment the hit counter."""
+        key = "test_key"
+        cache.set(key, sample_df, url="https://api.example.com")
+
+        cache.get(key)
+        cache.get(key)
+        cache.get(key)
+
+        stats = cache.stats()
+        assert stats["hits"] == 3
+        assert stats["misses"] == 0
+
+    def test_stats_tracks_misses_for_missing_key(self, cache: ParquetCache) -> None:
+        """Validate that cache misses for missing keys are tracked."""
+        cache.get("nonexistent_key")
+        cache.get("another_missing")
+
+        stats = cache.stats()
+        assert stats["hits"] == 0
+        assert stats["misses"] == 2
+
+    def test_stats_tracks_misses_for_expired_key(self, cache: ParquetCache, sample_df: pl.DataFrame) -> None:
+        """Validate that cache misses for expired keys are tracked."""
+        key = "test_key"
+        cache.set(key, sample_df, url="https://api.example.com", ttl_seconds=0)
+
+        time.sleep(0.01)
+        cache.get(key)
+
+        stats = cache.stats()
+        assert stats["hits"] == 0
+        assert stats["misses"] == 1
+
+    def test_stats_disk_bytes(self, cache: ParquetCache, sample_df: pl.DataFrame) -> None:
+        """Validate that disk_bytes reflects actual file sizes."""
+        cache.set("key1", sample_df, url="https://api.example.com/1")
+
+        stats = cache.stats()
+        assert stats["disk_bytes"] > 0
+
+        # Add another entry
+        cache.set("key2", sample_df, url="https://api.example.com/2")
+
+        stats2 = cache.stats()
+        assert stats2["disk_bytes"] > stats["disk_bytes"]
+
+    def test_stats_disk_bytes_decreases_after_delete(self, cache: ParquetCache, sample_df: pl.DataFrame) -> None:
+        """Validate that disk_bytes decreases after deleting entries."""
+        cache.set("key1", sample_df, url="https://api.example.com/1")
+        cache.set("key2", sample_df, url="https://api.example.com/2")
+
+        stats_before = cache.stats()
+        cache.delete("key1")
+        stats_after = cache.stats()
+
+        assert stats_after["disk_bytes"] < stats_before["disk_bytes"]
+
+    def test_clear_resets_hit_miss_counters(self, cache: ParquetCache, sample_df: pl.DataFrame) -> None:
+        """Validate that clear() resets hit/miss counters."""
+        key = "test_key"
+        cache.set(key, sample_df, url="https://api.example.com")
+
+        cache.get(key)  # Hit
+        cache.get("missing")  # Miss
+
+        stats_before = cache.stats()
+        assert stats_before["hits"] == 1
+        assert stats_before["misses"] == 1
+
+        cache.clear()
+
+        stats_after = cache.stats()
+        assert stats_after["hits"] == 0
+        assert stats_after["misses"] == 0
+        assert stats_after["disk_bytes"] == 0
+
+    def test_stats_combined_hits_and_misses(self, cache: ParquetCache, sample_df: pl.DataFrame) -> None:
+        """Validate tracking of mixed hits and misses."""
+        cache.set("key1", sample_df, url="https://api.example.com/1")
+
+        cache.get("key1")  # Hit
+        cache.get("key1")  # Hit
+        cache.get("missing1")  # Miss
+        cache.get("key1")  # Hit
+        cache.get("missing2")  # Miss
+
+        stats = cache.stats()
+        assert stats["hits"] == 3
+        assert stats["misses"] == 2

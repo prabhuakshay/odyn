@@ -1202,6 +1202,20 @@ class BCWebServiceClient:
         """
         return self.cache.size() if self.cache else 0
 
+    @property
+    def cache_stats(self) -> dict[str, int] | None:
+        """Get cache statistics.
+
+        Returns:
+            Dictionary with hits, misses, and disk_bytes, or None if no cache.
+
+        Example:
+            >>> stats = client.cache_stats
+            >>> if stats:
+            ...     print(f"Cache hit rate: {stats['hits'] / max(1, stats['hits'] + stats['misses']):.1%}")
+        """
+        return self.cache.stats() if self.cache else None
+
     def __repr__(self) -> str:
         """Return a string representation of the client."""
         return (

@@ -124,7 +124,7 @@ class ParquetCache:
         ...     print("Entry exists")
     """
 
-    __slots__ = ("_cache_dir", "_default_ttl")
+    __slots__ = ("_cache_dir", "_default_ttl", "_hits", "_misses")
 
     def __init__(self, cache_dir: Path, default_ttl: int | None = None) -> None:
         """Initialize the cache.
@@ -136,6 +136,8 @@ class ParquetCache:
         """
         self._cache_dir = cache_dir
         self._default_ttl = default_ttl
+        self._hits = 0
+        self._misses = 0
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _parquet_path(self, key: str) -> Path:
@@ -186,12 +188,15 @@ class ParquetCache:
         """
         metadata = self._load_metadata(key)
         if metadata is None or metadata.is_expired:
+            self._misses += 1
             return None
 
         parquet_path = self._parquet_path(key)
         if not parquet_path.exists():
+            self._misses += 1
             return None
 
+        self._hits += 1
         return pl.read_parquet(parquet_path)
 
     def set(
@@ -272,7 +277,7 @@ class ParquetCache:
         return self._parquet_path(key).exists()
 
     def clear(self) -> int:
-        """Remove all cache entries.
+        """Remove all cache entries and reset statistics.
 
         Returns:
             The number of entries that were removed.
@@ -286,6 +291,8 @@ class ParquetCache:
             key = parquet_file.stem
             self.delete(key)
             count += 1
+        self._hits = 0
+        self._misses = 0
         return count
 
     def cleanup(self) -> int:
@@ -320,6 +327,26 @@ class ParquetCache:
             >>> print(f"Cache contains {cache.size()} entries")
         """
         return len(list(self._cache_dir.glob("*.parquet")))
+
+    def stats(self) -> dict[str, int]:
+        """Return cache statistics.
+
+        Returns:
+            Dictionary containing:
+                - hits: Number of successful cache retrievals.
+                - misses: Number of cache misses (not found or expired).
+                - disk_bytes: Total size of cached parquet files in bytes.
+
+        Example:
+            >>> stats = cache.stats()
+            >>> print(f"Hit rate: {stats['hits'] / (stats['hits'] + stats['misses']):.1%}")
+        """
+        disk_bytes = sum(f.stat().st_size for f in self._cache_dir.glob("*.parquet"))
+        return {
+            "hits": self._hits,
+            "misses": self._misses,
+            "disk_bytes": disk_bytes,
+        }
 
     @staticmethod
     def make_key(url: str, params: dict[str, str] | None = None) -> str:
