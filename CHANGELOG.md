@@ -5,6 +5,14 @@
 - **BREAKING**: Renamed `rate_limit` to `requests_per_minute` for clarity
 - Added `max_burst` parameter to control burst size (defaults to `max_connections`)
 - Moved rate limit check inside semaphore to avoid queuing waiting requests
+- Added cache statistics: `ParquetCache.stats()` returns hits, misses, disk_bytes
+- Added `cache_stats` property on client for easy access
+- Added progress callbacks: `ProgressCallback` for pagination, `BatchProgressCallback` for batches
+- Added `on_progress` parameter to `get()`, `get_stream()`, `get_batch()`
+- Added request/response hooks: `RequestHook` and `ResponseHook` protocols
+- Added `on_request`, `on_response` parameters to `create()`
+- Added delta sync helpers: `get_since(timestamp)` and `get_before(timestamp)`
+- Added `BCWebServiceClientSync`: Synchronous wrapper for non-async contexts
 
 ## [0.3.0] - 2026-01-09
 
