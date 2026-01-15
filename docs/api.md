@@ -29,7 +29,8 @@ Factory method to create a new client instance.
 | `max_retries` | `int` | `3` | Maximum number of retry attempts for transient errors. |
 | `retry_backoff` | `float` | `1.0` | Initial delay for exponential backoff. |
 | `max_connections` | `int` | `4` | Maximum number of concurrent connections in the pool. |
-| `rate_limit` | `float \| None` | `550.0` | Target requests per minute. Set to `None` to disable. |
+| `requests_per_minute` | `float \| None` | `550.0` | Target requests per minute. Set to `None` to disable. |
+| `max_burst` | `int \| None` | `None` | Maximum burst size (defaults to `max_connections`). Prevents server hammering on startup. |
 
 **Returns:** `BCWebServiceClient`
 
@@ -227,7 +228,10 @@ Persistent storage for DataFrames.
 | `OdynSSLError` | `OdynConnectionError` | SSL certificate verification failed. |
 | `WebServiceError` | `OdynError` | API returned a non-success status code. |
 | `AuthenticationError` | `WebServiceError` | HTTP 401 Unauthorized. |
+| `ForbiddenError` | `WebServiceError` | HTTP 403 Forbidden. |
 | `NotFoundError` | `WebServiceError` | HTTP 404 Not Found. |
+| `ValidationError` | `WebServiceError` | HTTP 400 Bad Request. |
 | `RateLimitError` | `WebServiceError` | HTTP 429 Too Many Requests. |
+| `ServerError` | `WebServiceError` | HTTP 5xx Server Error. |
 | `RetryExhaustedError` | `OdynError` | Max retries reached without success. |
 | `QueryValidationError` | `OdynError` | Invalid OData query construction. |

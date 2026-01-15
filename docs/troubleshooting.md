@@ -32,4 +32,4 @@ OData filters are passed in the URL. If you build a massive `is_in()` filter wit
 
 ### Rate Limiting
 If you see **429 Too Many Requests**, you are hitting the server-side OData limits.
-- **Solution**: Decrease the `rate_limit` (e.g., to `300.0` for 300 requests/minute) and `max_connections` (e.g., to `2`) in the client configuration to stay within the server's thresholds.
+- **Solution**: Decrease `requests_per_minute` (e.g., to `300.0`) and `max_connections` (e.g., to `2`) in the client configuration to stay within the server's thresholds.
