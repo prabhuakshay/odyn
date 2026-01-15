@@ -74,10 +74,12 @@ from odyn.exceptions import (
     ValidationError,
     WebServiceError,
 )
+from odyn.sync import BCWebServiceClientSync
 
 __all__ = [
     "AuthenticationError",
     "BCWebServiceClient",
+    "BCWebServiceClientSync",
     "BasicAuth",
     "CacheMetadata",
     "ForbiddenError",
