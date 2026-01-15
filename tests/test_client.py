@@ -1208,3 +1208,124 @@ class TestRequestResponseHooks:
 
         assert client.on_request is None
         assert client.on_response is None
+
+
+class TestDeltaSyncHelpers:
+    """Tests for delta sync helper methods (get_since, get_before)."""
+
+    @pytest.fixture
+    def client(self):
+        return BCWebServiceClient.create(
+            server="https://bc-server",
+            instance="BC",
+            auth=BasicAuth("user", "pass"),
+            requests_per_minute=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_since_filters_by_timestamp(self, client):
+        """get_since() adds SystemModifiedAt > timestamp filter."""
+        with patch.object(client, "get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = pl.DataFrame({"No": ["C1"]})
+            await client.get_since("customers", "2024-01-15T10:30:00Z")
+
+        mock_get.assert_called_once()
+        query = mock_get.call_args[1]["query"]
+        params = query.build()
+        assert "SystemModifiedAt gt '2024-01-15T10:30:00Z'" in params["$filter"]
+
+    @pytest.mark.asyncio
+    async def test_get_since_merges_with_existing_query(self, client):
+        """get_since() merges timestamp filter with existing query filters."""
+        from odyn.query import F, ODataQuery
+
+        with patch.object(client, "get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = pl.DataFrame({"No": ["C1"]})
+            query = ODataQuery().select("No", "Name").filter(F.Balance > 1000)
+            await client.get_since("customers", "2024-01-15T10:30:00Z", query=query)
+
+        mock_get.assert_called_once()
+        query = mock_get.call_args[1]["query"]
+        params = query.build()
+        # Both filters should be present
+        assert "SystemModifiedAt gt '2024-01-15T10:30:00Z'" in params["$filter"]
+        assert "Balance gt 1000" in params["$filter"]
+        assert params["$select"] == "No,Name"
+
+    @pytest.mark.asyncio
+    async def test_get_since_defaults_use_cache_false(self, client):
+        """get_since() defaults to use_cache=False for fresh data."""
+        with patch.object(client, "get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = pl.DataFrame()
+            await client.get_since("customers", "2024-01-15T10:30:00Z")
+
+        mock_get.assert_called_once()
+        assert mock_get.call_args[1]["use_cache"] is False
+
+    @pytest.mark.asyncio
+    async def test_get_since_passes_progress_callback(self, client):
+        """get_since() passes on_progress to get()."""
+        progress_calls = []
+
+        def on_progress(*, page, records_on_page, total_records, is_final):
+            progress_calls.append(page)
+
+        with patch.object(client, "get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = pl.DataFrame()
+            await client.get_since("customers", "2024-01-15T10:30:00Z", on_progress=on_progress)
+
+        mock_get.assert_called_once()
+        assert mock_get.call_args[1]["on_progress"] is on_progress
+
+    @pytest.mark.asyncio
+    async def test_get_before_filters_by_timestamp(self, client):
+        """get_before() adds SystemModifiedAt < timestamp filter."""
+        with patch.object(client, "get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = pl.DataFrame({"No": ["C1"]})
+            await client.get_before("customers", "2024-01-15T10:30:00Z")
+
+        mock_get.assert_called_once()
+        query = mock_get.call_args[1]["query"]
+        params = query.build()
+        assert "SystemModifiedAt lt '2024-01-15T10:30:00Z'" in params["$filter"]
+
+    @pytest.mark.asyncio
+    async def test_get_before_merges_with_existing_query(self, client):
+        """get_before() merges timestamp filter with existing query filters."""
+        from odyn.query import F, ODataQuery
+
+        with patch.object(client, "get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = pl.DataFrame({"No": ["C1"]})
+            query = ODataQuery().filter(F.Status == "Active")
+            await client.get_before("customers", "2024-01-15T10:30:00Z", query=query)
+
+        mock_get.assert_called_once()
+        query = mock_get.call_args[1]["query"]
+        params = query.build()
+        assert "SystemModifiedAt lt '2024-01-15T10:30:00Z'" in params["$filter"]
+        assert "Status eq 'Active'" in params["$filter"]
+
+    @pytest.mark.asyncio
+    async def test_get_before_defaults_use_cache_true(self, client):
+        """get_before() defaults to use_cache=True for historical data."""
+        with patch.object(client, "get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = pl.DataFrame()
+            await client.get_before("customers", "2024-01-15T10:30:00Z")
+
+        mock_get.assert_called_once()
+        assert mock_get.call_args[1]["use_cache"] is True
+
+    @pytest.mark.asyncio
+    async def test_get_before_passes_progress_callback(self, client):
+        """get_before() passes on_progress to get()."""
+        progress_calls = []
+
+        def on_progress(*, page, records_on_page, total_records, is_final):
+            progress_calls.append(page)
+
+        with patch.object(client, "get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = pl.DataFrame()
+            await client.get_before("customers", "2024-01-15T10:30:00Z", on_progress=on_progress)
+
+        mock_get.assert_called_once()
+        assert mock_get.call_args[1]["on_progress"] is on_progress

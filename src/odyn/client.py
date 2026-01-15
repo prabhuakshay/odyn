@@ -1198,6 +1198,94 @@ class BCWebServiceClient:
         else:
             return True
 
+    async def get_since(
+        self,
+        endpoint: str,
+        timestamp: str,
+        *,
+        query: ODataQuery | None = None,
+        use_cache: bool = False,
+        on_progress: ProgressCallback | None = None,
+    ) -> pl.DataFrame:
+        """Get records modified since a timestamp (delta sync).
+
+        Fetches records where SystemModifiedAt > timestamp. Useful for
+        incremental data synchronization.
+
+        Args:
+            endpoint: OData entity set name.
+            timestamp: ISO 8601 timestamp (e.g., "2024-01-15T10:30:00Z").
+            query: Optional additional ODataQuery (filter, select, etc.).
+            use_cache: Whether to cache results (default: False for fresh data).
+            on_progress: Optional callback invoked after each page is fetched.
+
+        Returns:
+            Polars DataFrame with records modified after the timestamp.
+
+        Example:
+            >>> # Get customers modified in the last hour
+            >>> from datetime import datetime, timedelta, timezone
+            >>> since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+            >>> updated = await client.get_since("customers", since)
+            >>>
+            >>> # With additional filtering
+            >>> query = ODataQuery().select("No", "Name", "SystemModifiedAt")
+            >>> updated = await client.get_since("customers", since, query=query)
+        """
+        # Build filter for SystemModifiedAt > timestamp
+        base_query = query or ODataQuery()
+        delta_filter = Field("SystemModifiedAt") > timestamp
+        merged_query = base_query.filter(delta_filter)
+
+        return await self.get(
+            endpoint,
+            query=merged_query,
+            use_cache=use_cache,
+            on_progress=on_progress,
+        )
+
+    async def get_before(
+        self,
+        endpoint: str,
+        timestamp: str,
+        *,
+        query: ODataQuery | None = None,
+        use_cache: bool = True,
+        on_progress: ProgressCallback | None = None,
+    ) -> pl.DataFrame:
+        """Get records modified before a timestamp.
+
+        Fetches records where SystemModifiedAt < timestamp. Useful for
+        fetching historical data or records that haven't been updated recently.
+
+        Args:
+            endpoint: OData entity set name.
+            timestamp: ISO 8601 timestamp (e.g., "2024-01-15T10:30:00Z").
+            query: Optional additional ODataQuery (filter, select, etc.).
+            use_cache: Whether to cache results (default: True for historical data).
+            on_progress: Optional callback invoked after each page is fetched.
+
+        Returns:
+            Polars DataFrame with records modified before the timestamp.
+
+        Example:
+            >>> # Get customers not modified in the last 30 days
+            >>> from datetime import datetime, timedelta, timezone
+            >>> before = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+            >>> stale = await client.get_before("customers", before)
+        """
+        # Build filter for SystemModifiedAt < timestamp
+        base_query = query or ODataQuery()
+        delta_filter = Field("SystemModifiedAt") < timestamp
+        merged_query = base_query.filter(delta_filter)
+
+        return await self.get(
+            endpoint,
+            query=merged_query,
+            use_cache=use_cache,
+            on_progress=on_progress,
+        )
+
     async def get_all(
         self,
         endpoint: str,
