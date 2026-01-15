@@ -81,3 +81,75 @@ customers = await client.get_batch(
     values=large_id_list
 )
 ```
+
+### Delta Sync (`get_since`, `get_before`)
+
+For incremental data synchronization, use the delta sync helpers:
+
+```python
+from datetime import datetime, timedelta, timezone
+
+# Get records modified in the last hour
+since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+updated = await client.get_since("customers", since)
+
+# Get records not modified in the last 30 days
+before = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+stale = await client.get_before("customers", before)
+```
+
+## Progress Tracking
+
+All fetching methods support progress callbacks for monitoring long-running operations:
+
+```python
+def on_progress(*, page, records_on_page, total_records, is_final):
+    print(f"Page {page}: {total_records} records so far")
+
+df = await client.get("customers", on_progress=on_progress)
+```
+
+For batch operations, use `BatchProgressCallback`:
+
+```python
+def on_batch_progress(*, batch, total_batches, successful, failed, is_final):
+    print(f"Batch {batch}/{total_batches}")
+
+df = await client.get_batch("customers", "No", ids, on_progress=on_batch_progress)
+```
+
+## Request/Response Hooks
+
+For logging, metrics, or debugging, you can attach hooks to every HTTP request:
+
+```python
+def log_request(*, method, url, params):
+    print(f">> {method} {url}")
+
+def log_response(*, method, url, status_code, duration_ms):
+    print(f"<< {status_code} in {duration_ms:.0f}ms")
+
+client = BCWebServiceClient.create(
+    ...,
+    on_request=log_request,
+    on_response=log_response,
+)
+```
+
+## Synchronous Client
+
+For non-async contexts (scripts, notebooks, Django views), use `BCWebServiceClientSync`:
+
+```python
+from odyn import BCWebServiceClientSync, BasicAuth
+
+with BCWebServiceClientSync.create(
+    server="https://bc.example.com",
+    instance="BC210",
+    auth=BasicAuth("user", "password"),
+) as client:
+    customers = client.get("customers")
+    print(f"Found {len(customers)} customers")
+```
+
+The sync client mirrors all async methods as blocking calls.
