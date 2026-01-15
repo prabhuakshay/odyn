@@ -43,6 +43,7 @@ import asyncio
 import contextlib
 import logging
 import random
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
@@ -77,6 +78,8 @@ __all__ = [
     "BCWebServiceClient",
     "BatchProgressCallback",
     "ProgressCallback",
+    "RequestHook",
+    "ResponseHook",
 ]
 
 
@@ -138,6 +141,60 @@ class BatchProgressCallback(Protocol):
         ...
 
 
+@runtime_checkable
+class RequestHook(Protocol):
+    """Protocol for request hooks called before each HTTP request.
+
+    Example:
+        >>> def on_request(*, method, url, params):
+        ...     print(f"{method} {url}")
+    """
+
+    def __call__(
+        self,
+        *,
+        method: str,
+        url: str,
+        params: dict[str, str] | None,
+    ) -> None:
+        """Called before each HTTP request is made.
+
+        Args:
+            method: HTTP method (GET, POST, etc.).
+            url: The full request URL.
+            params: Query parameters, if any.
+        """
+        ...
+
+
+@runtime_checkable
+class ResponseHook(Protocol):
+    """Protocol for response hooks called after each HTTP response.
+
+    Example:
+        >>> def on_response(*, method, url, status_code, duration_ms):
+        ...     print(f"{method} {url} -> {status_code} in {duration_ms:.0f}ms")
+    """
+
+    def __call__(
+        self,
+        *,
+        method: str,
+        url: str,
+        status_code: int,
+        duration_ms: float,
+    ) -> None:
+        """Called after each HTTP response is received.
+
+        Args:
+            method: HTTP method (GET, POST, etc.).
+            url: The full request URL.
+            status_code: HTTP response status code.
+            duration_ms: Request duration in milliseconds.
+        """
+        ...
+
+
 # Create a logger for the client
 logger = logging.getLogger("odyn.client")
 
@@ -187,6 +244,8 @@ class BCWebServiceClient:
         max_connections: Maximum concurrent connections (default: 4).
         requests_per_minute: Maximum requests per minute (default: 550, None to disable).
         max_burst: Maximum burst size for rate limiting (default: max_connections).
+        on_request: Optional hook called before each HTTP request.
+        on_response: Optional hook called after each HTTP response.
 
     Example:
         >>> async with BCWebServiceClient.create(
@@ -214,6 +273,10 @@ class BCWebServiceClient:
     max_connections: int = 4
     requests_per_minute: float | None = 550.0  # requests per minute (default: 550/min)
     max_burst: int | None = None  # max burst size (default: max_connections)
+
+    # Hooks
+    on_request: RequestHook | None = None
+    on_response: ResponseHook | None = None
 
     _http: httpx.AsyncClient = field(init=False, repr=False)
     _semaphore: asyncio.Semaphore = field(init=False, repr=False)
@@ -282,6 +345,8 @@ class BCWebServiceClient:
         max_connections: int = 4,
         requests_per_minute: float | None = 550.0,
         max_burst: int | None = None,
+        on_request: RequestHook | None = None,
+        on_response: ResponseHook | None = None,
     ) -> BCWebServiceClient:
         r"""Create a client for Business Central on-premises web services.
 
@@ -314,6 +379,8 @@ class BCWebServiceClient:
             max_burst: Maximum burst size for rate limiting (default: max_connections).
                        Controls how many requests can be sent immediately before
                        rate limiting kicks in. Low default prevents hammering server.
+            on_request: Optional hook called before each HTTP request.
+            on_response: Optional hook called after each HTTP response.
 
         Returns:
             Configured BCWebServiceClient instance.
@@ -360,6 +427,8 @@ class BCWebServiceClient:
             max_connections=max_connections,
             requests_per_minute=requests_per_minute,
             max_burst=max_burst,
+            on_request=on_request,
+            on_response=on_response,
         )
 
     def _build_url(self, endpoint: str) -> str:
@@ -605,16 +674,33 @@ class BCWebServiceClient:
                         self.max_retries + 1,
                     )
 
+                    # Call request hook
+                    if self.on_request is not None:
+                        self.on_request(method=method, url=url, params=params)
+
+                    start_time = time.perf_counter()
                     response = await self._http.request(
                         method,
                         url,
                         params=params,
                         json=json_body,
                     )
+                    duration_ms = (time.perf_counter() - start_time) * 1000
+
+                    # Call response hook
+                    if self.on_response is not None:
+                        self.on_response(
+                            method=method,
+                            url=url,
+                            status_code=response.status_code,
+                            duration_ms=duration_ms,
+                        )
+
                     logger.debug(
-                        "Response: status=%d, bytes=%d",
+                        "Response: status=%d, bytes=%d, duration=%.1fms",
                         response.status_code,
                         len(response.content),
+                        duration_ms,
                     )
                     return await self._handle_response(response, url)
 

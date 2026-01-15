@@ -1015,3 +1015,196 @@ class TestProgressCallbacks:
 
         assert len(progress_calls) == 1
         assert progress_calls[0] == {"page": 1, "records_on_page": 0}
+
+
+class TestRequestResponseHooks:
+    """Tests for request/response hook support."""
+
+    @pytest.fixture
+    def mock_response(self):
+        """Create a mock httpx response."""
+        response = MagicMock(spec=httpx.Response)
+        response.is_success = True
+        response.status_code = 200
+        response.json.return_value = {"value": [{"No": "C1"}]}
+        response.content = b'{"value": [{"No": "C1"}]}'
+        return response
+
+    @pytest.mark.asyncio
+    async def test_request_hook_called_before_request(self, mock_response):
+        """on_request hook is called before each HTTP request."""
+        request_calls = []
+
+        def on_request(*, method, url, params):
+            request_calls.append({"method": method, "url": url, "params": params})
+
+        client = BCWebServiceClient.create(
+            server="https://bc-server",
+            instance="BC",
+            auth=BasicAuth("user", "pass"),
+            requests_per_minute=None,
+            on_request=on_request,
+        )
+
+        with patch.object(client._http, "request", new_callable=AsyncMock) as mock_req:
+            mock_req.return_value = mock_response
+            await client._request("GET", "https://test.com/api", params={"$top": "10"})
+
+        assert len(request_calls) == 1
+        assert request_calls[0]["method"] == "GET"
+        assert request_calls[0]["url"] == "https://test.com/api"
+        assert request_calls[0]["params"] == {"$top": "10"}
+
+    @pytest.mark.asyncio
+    async def test_response_hook_called_after_response(self, mock_response):
+        """on_response hook is called after each HTTP response."""
+        response_calls = []
+
+        def on_response(*, method, url, status_code, duration_ms):
+            response_calls.append(
+                {
+                    "method": method,
+                    "url": url,
+                    "status_code": status_code,
+                    "duration_ms": duration_ms,
+                }
+            )
+
+        client = BCWebServiceClient.create(
+            server="https://bc-server",
+            instance="BC",
+            auth=BasicAuth("user", "pass"),
+            requests_per_minute=None,
+            on_response=on_response,
+        )
+
+        with patch.object(client._http, "request", new_callable=AsyncMock) as mock_req:
+            mock_req.return_value = mock_response
+            await client._request("GET", "https://test.com/api")
+
+        assert len(response_calls) == 1
+        assert response_calls[0]["method"] == "GET"
+        assert response_calls[0]["url"] == "https://test.com/api"
+        assert response_calls[0]["status_code"] == 200
+        assert response_calls[0]["duration_ms"] >= 0
+
+    @pytest.mark.asyncio
+    async def test_both_hooks_called_together(self, mock_response):
+        """Both request and response hooks can be used together."""
+        request_calls = []
+        response_calls = []
+
+        def on_request(*, method, url, params):
+            request_calls.append(method)
+
+        def on_response(*, method, url, status_code, duration_ms):
+            response_calls.append(status_code)
+
+        client = BCWebServiceClient.create(
+            server="https://bc-server",
+            instance="BC",
+            auth=BasicAuth("user", "pass"),
+            requests_per_minute=None,
+            on_request=on_request,
+            on_response=on_response,
+        )
+
+        with patch.object(client._http, "request", new_callable=AsyncMock) as mock_req:
+            mock_req.return_value = mock_response
+            await client._request("GET", "https://test.com/api")
+
+        assert request_calls == ["GET"]
+        assert response_calls == [200]
+
+    @pytest.mark.asyncio
+    async def test_hooks_not_called_on_retry_failure(self, mock_response):
+        """Hooks are called on each retry attempt."""
+        request_calls = []
+        response_calls = []
+
+        def on_request(*, method, url, params):
+            request_calls.append(1)
+
+        def on_response(*, method, url, status_code, duration_ms):
+            response_calls.append(status_code)
+
+        client = BCWebServiceClient.create(
+            server="https://bc-server",
+            instance="BC",
+            auth=BasicAuth("user", "pass"),
+            requests_per_minute=None,
+            max_retries=2,
+            retry_backoff=0.01,
+            on_request=on_request,
+            on_response=on_response,
+        )
+
+        # First two calls return 500, third succeeds
+        error_response = MagicMock(spec=httpx.Response)
+        error_response.is_success = False
+        error_response.status_code = 500
+        error_response.text = "Internal Server Error"
+        error_response.json.return_value = {}
+        error_response.reason_phrase = "Internal Server Error"
+
+        with patch.object(client._http, "request", new_callable=AsyncMock) as mock_req:
+            mock_req.side_effect = [error_response, error_response, mock_response]
+            await client._request("GET", "https://test.com/api")
+
+        # 3 request hooks (one per attempt)
+        assert len(request_calls) == 3
+        # 3 response hooks (one per attempt)
+        assert response_calls == [500, 500, 200]
+
+    @pytest.mark.asyncio
+    async def test_hooks_with_none_params(self, mock_response):
+        """Hooks work correctly when params is None."""
+        request_calls = []
+
+        def on_request(*, method, url, params):
+            request_calls.append(params)
+
+        client = BCWebServiceClient.create(
+            server="https://bc-server",
+            instance="BC",
+            auth=BasicAuth("user", "pass"),
+            requests_per_minute=None,
+            on_request=on_request,
+        )
+
+        with patch.object(client._http, "request", new_callable=AsyncMock) as mock_req:
+            mock_req.return_value = mock_response
+            await client._request("GET", "https://test.com/api", params=None)
+
+        assert request_calls == [None]
+
+    def test_create_stores_hooks(self):
+        """create() stores hook parameters correctly."""
+
+        def on_request(*, method, url, params):
+            pass
+
+        def on_response(*, method, url, status_code, duration_ms):
+            pass
+
+        client = BCWebServiceClient.create(
+            server="https://bc-server",
+            instance="BC",
+            auth=BasicAuth("user", "pass"),
+            on_request=on_request,
+            on_response=on_response,
+        )
+
+        assert client.on_request is on_request
+        assert client.on_response is on_response
+
+    def test_hooks_default_to_none(self):
+        """Hooks default to None when not specified."""
+        client = BCWebServiceClient.create(
+            server="https://bc-server",
+            instance="BC",
+            auth=BasicAuth("user", "pass"),
+        )
+
+        assert client.on_request is None
+        assert client.on_response is None
