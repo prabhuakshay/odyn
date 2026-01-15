@@ -517,7 +517,7 @@ class TestBCWebServiceClientRequestLogic:
             server="https://bc-server",
             instance="BC",
             auth=BasicAuth("user", "pass"),
-            rate_limit=None,
+            requests_per_minute=None,
             max_retries=0,
         )
 
@@ -592,7 +592,7 @@ class TestBCWebServiceClientBatchOptions:
             server="https://bc-server",
             instance="BC",
             auth=BasicAuth("user", "pass"),
-            rate_limit=None,
+            requests_per_minute=None,
         )
 
     @pytest.mark.asyncio
@@ -691,13 +691,12 @@ class TestBCWebServiceClientMisc:
 
     @pytest.mark.asyncio
     async def test_apply_rate_limit_not_triggered(self, client):
-        """_apply_rate_limit does not trigger sleep when last request was long ago."""
-        client.rate_limit = 100.0
-        client._last_request_time = asyncio.get_event_loop().time() - 1.0
+        """_apply_rate_limit is a no-op when limiter is None."""
+        client.requests_per_minute = None
+        client._limiter = None
 
-        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            await client._apply_rate_limit()
-            mock_sleep.assert_not_called()
+        # Should complete immediately without error
+        await client._apply_rate_limit()
 
     @pytest.mark.asyncio
     async def test_get_by_id_no_select(self, client):

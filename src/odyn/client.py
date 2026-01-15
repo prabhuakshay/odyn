@@ -124,7 +124,8 @@ class BCWebServiceClient:
         max_retries: Maximum retry attempts for transient failures (default: 3).
         retry_backoff: Base delay in seconds for exponential backoff (default: 1.0).
         max_connections: Maximum concurrent connections (default: 4).
-        rate_limit: Maximum requests per minute (default: 550, None to disable).
+        requests_per_minute: Maximum requests per minute (default: 550, None to disable).
+        max_burst: Maximum burst size for rate limiting (default: max_connections).
 
     Example:
         >>> async with BCWebServiceClient.create(
@@ -150,7 +151,8 @@ class BCWebServiceClient:
 
     # Concurrency and rate limiting
     max_connections: int = 4
-    rate_limit: float | None = 550.0  # requests per minute (default: 550/min)
+    requests_per_minute: float | None = 550.0  # requests per minute (default: 550/min)
+    max_burst: int | None = None  # max burst size (default: max_connections)
 
     _http: httpx.AsyncClient = field(init=False, repr=False)
     _semaphore: asyncio.Semaphore = field(init=False, repr=False)
@@ -178,21 +180,26 @@ class BCWebServiceClient:
         # Initialize concurrency controls
         self._semaphore = asyncio.Semaphore(self.max_connections)
 
-        # Initialize rate limiter (requests per minute)
-        if self.rate_limit is not None:
-            self._limiter = AsyncLimiter(self.rate_limit, 60.0)
+        # Initialize rate limiter with burst control
+        # Burst defaults to max_connections to prevent hammering server on startup
+        if self.requests_per_minute is not None:
+            burst = self.max_burst if self.max_burst is not None else self.max_connections
+            # Time period scaled so sustained rate equals requests_per_minute
+            time_period = 60.0 * burst / self.requests_per_minute
+            self._limiter = AsyncLimiter(burst, time_period)
         else:
             self._limiter = None
 
         logger.info(
             "Client initialized: base_url=%s, company=%s, verify_ssl=%s, "
-            "max_retries=%d, max_connections=%d, rate_limit=%s",
+            "max_retries=%d, max_connections=%d, rate_limit=%s, max_burst=%s",
             self.base_url,
             self.company,
             self.verify_ssl,
             self.max_retries,
             self.max_connections,
-            f"{self.rate_limit} req/min" if self.rate_limit else "disabled",
+            f"{self.requests_per_minute} req/min" if self.requests_per_minute else "disabled",
+            self.max_burst if self.max_burst is not None else self.max_connections,
         )
 
     @classmethod
@@ -212,7 +219,8 @@ class BCWebServiceClient:
         max_retries: int = 3,
         retry_backoff: float = 1.0,
         max_connections: int = 4,
-        rate_limit: float | None = 550.0,
+        requests_per_minute: float | None = 550.0,
+        max_burst: int | None = None,
     ) -> BCWebServiceClient:
         r"""Create a client for Business Central on-premises web services.
 
@@ -239,9 +247,12 @@ class BCWebServiceClient:
             max_connections: Maximum concurrent connections to the server (default: 4).
                              Business Central on-premises typically handles 4-10
                              concurrent connections well.
-            rate_limit: Maximum requests per minute (default: 550).
+            requests_per_minute: Maximum requests per minute (default: 550).
                         Set to None to disable rate limiting.
                         Default of 550 req/min is conservative for BC on-premises.
+            max_burst: Maximum burst size for rate limiting (default: max_connections).
+                       Controls how many requests can be sent immediately before
+                       rate limiting kicks in. Low default prevents hammering server.
 
         Returns:
             Configured BCWebServiceClient instance.
@@ -256,7 +267,8 @@ class BCWebServiceClient:
             ...     cache_dir="~/.cache/odyn",
             ...     cache_ttl=3600,  # 1 hour
             ...     max_retries=5,  # More retries for flaky networks
-            ...     rate_limit=300.0,  # Slower rate for busy servers (300 req/min)
+            ...     requests_per_minute=300.0,  # Slower rate for busy servers
+            ...     max_burst=10,  # Allow small burst before throttling
             ... )
         """
         _configure_logging(log_level)
@@ -285,7 +297,8 @@ class BCWebServiceClient:
             max_retries=max_retries,
             retry_backoff=retry_backoff,
             max_connections=max_connections,
-            rate_limit=rate_limit,
+            requests_per_minute=requests_per_minute,
+            max_burst=max_burst,
         )
 
     def _build_url(self, endpoint: str) -> str:
@@ -518,11 +531,10 @@ class BCWebServiceClient:
 
         for attempt in range(self.max_retries + 1):
             try:
-                # Apply rate limiting
-                await self._apply_rate_limit()
-
                 # Acquire semaphore for concurrency control
                 async with self._semaphore:
+                    # Apply rate limiting (inside semaphore to avoid queuing up waiting requests)
+                    await self._apply_rate_limit()
                     logger.debug(
                         "Request: %s %s params=%s (attempt %d/%d)",
                         method,

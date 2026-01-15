@@ -86,24 +86,24 @@ class TestClientResilienceConfig:
         )
         assert client.max_connections == 10
 
-    def test_create_default_rate_limit(self):
-        """create() uses default rate_limit of 550.0 requests per minute."""
+    def test_create_default_requests_per_minute(self):
+        """create() uses default requests_per_minute of 550.0."""
         client = BCWebServiceClient.create(
             server="https://bc-server:7048",
             instance="BC210",
             auth=BasicAuth("user", "pass"),
         )
-        assert client.rate_limit == 550.0
+        assert client.requests_per_minute == 550.0
 
-    def test_create_custom_rate_limit(self):
-        """create() accepts custom rate_limit."""
+    def test_create_custom_requests_per_minute(self):
+        """create() accepts custom requests_per_minute."""
         client = BCWebServiceClient.create(
             server="https://bc-server:7048",
             instance="BC210",
             auth=BasicAuth("user", "pass"),
-            rate_limit=300.0,
+            requests_per_minute=300.0,
         )
-        assert client.rate_limit == 300.0
+        assert client.requests_per_minute == 300.0
 
     def test_create_disable_rate_limit(self):
         """create() can disable rate limiting with None."""
@@ -111,9 +111,30 @@ class TestClientResilienceConfig:
             server="https://bc-server:7048",
             instance="BC210",
             auth=BasicAuth("user", "pass"),
-            rate_limit=None,
+            requests_per_minute=None,
         )
-        assert client.rate_limit is None
+        assert client.requests_per_minute is None
+
+    def test_create_default_max_burst(self):
+        """create() uses max_connections as default max_burst."""
+        client = BCWebServiceClient.create(
+            server="https://bc-server:7048",
+            instance="BC210",
+            auth=BasicAuth("user", "pass"),
+            max_connections=4,
+        )
+        # max_burst defaults to None, which means max_connections is used
+        assert client.max_burst is None
+
+    def test_create_custom_max_burst(self):
+        """create() accepts custom max_burst."""
+        client = BCWebServiceClient.create(
+            server="https://bc-server:7048",
+            instance="BC210",
+            auth=BasicAuth("user", "pass"),
+            max_burst=10,
+        )
+        assert client.max_burst == 10
 
     def test_create_zero_retries(self):
         """create() allows disabling retries with 0."""
@@ -300,7 +321,7 @@ class TestRetryBehavior:
             server="https://bc-server:7048",
             instance="BC210",
             auth=BasicAuth("user", "pass"),
-            rate_limit=None,  # Disable rate limiting for test speed
+            requests_per_minute=None,  # Disable rate limiting for test speed
         )
 
         mock_response = MagicMock()
@@ -325,7 +346,7 @@ class TestRetryBehavior:
             auth=BasicAuth("user", "pass"),
             max_retries=2,
             retry_backoff=0.01,  # Fast backoff for testing
-            rate_limit=None,
+            requests_per_minute=None,
         )
 
         mock_response = MagicMock()
@@ -358,7 +379,7 @@ class TestRetryBehavior:
             auth=BasicAuth("user", "pass"),
             max_retries=2,
             retry_backoff=0.01,
-            rate_limit=None,
+            requests_per_minute=None,
         )
 
         async def mock_request(*args, **kwargs):
@@ -380,7 +401,7 @@ class TestRetryBehavior:
             instance="BC210",
             auth=BasicAuth("user", "pass"),
             max_retries=3,
-            rate_limit=None,
+            requests_per_minute=None,
         )
 
         mock_response = MagicMock()
@@ -408,7 +429,7 @@ class TestRetryBehavior:
             auth=BasicAuth("user", "pass"),
             max_retries=2,
             retry_backoff=0.01,
-            rate_limit=None,
+            requests_per_minute=None,
         )
 
         call_count = 0
@@ -445,7 +466,7 @@ class TestRetryBehavior:
             auth=BasicAuth("user", "pass"),
             max_retries=2,
             retry_backoff=0.01,
-            rate_limit=None,
+            requests_per_minute=None,
         )
 
         call_count = 0
@@ -478,26 +499,42 @@ class TestRetryBehavior:
 class TestRateLimiting:
     """Tests for rate limiting behavior using aiolimiter."""
 
-    def test_rate_limiter_initialized_when_enabled(self):
-        """Rate limiter is initialized when rate_limit is set."""
+    def test_rate_limiter_initialized_with_burst_control(self):
+        """Rate limiter is initialized with burst control when requests_per_minute is set."""
         client = BCWebServiceClient.create(
             server="https://bc-server:7048",
             instance="BC210",
             auth=BasicAuth("user", "pass"),
-            rate_limit=600.0,  # 600 req/min
+            requests_per_minute=600.0,  # 600 req/min
+            max_connections=4,  # default burst
         )
         assert client._limiter is not None
-        # AsyncLimiter stores max_rate and time_period
-        assert client._limiter.max_rate == 600.0
-        assert client._limiter.time_period == 60.0
+        # Burst defaults to max_connections (4)
+        # time_period = 60.0 * burst / requests_per_minute = 60.0 * 4 / 600 = 0.4
+        assert client._limiter.max_rate == 4  # burst size
+        assert client._limiter.time_period == 0.4  # scaled time period
 
-    def test_rate_limiter_none_when_disabled(self):
-        """Rate limiter is None when rate_limit is None."""
+    def test_rate_limiter_with_custom_burst(self):
+        """Rate limiter uses custom max_burst when provided."""
         client = BCWebServiceClient.create(
             server="https://bc-server:7048",
             instance="BC210",
             auth=BasicAuth("user", "pass"),
-            rate_limit=None,
+            requests_per_minute=600.0,
+            max_burst=10,
+        )
+        assert client._limiter is not None
+        # time_period = 60.0 * 10 / 600 = 1.0
+        assert client._limiter.max_rate == 10
+        assert client._limiter.time_period == 1.0
+
+    def test_rate_limiter_none_when_disabled(self):
+        """Rate limiter is None when requests_per_minute is None."""
+        client = BCWebServiceClient.create(
+            server="https://bc-server:7048",
+            instance="BC210",
+            auth=BasicAuth("user", "pass"),
+            requests_per_minute=None,
         )
         assert client._limiter is None
 
@@ -508,7 +545,7 @@ class TestRateLimiting:
             server="https://bc-server:7048",
             instance="BC210",
             auth=BasicAuth("user", "pass"),
-            rate_limit=600.0,  # 600 req/min = 10 req/s
+            requests_per_minute=600.0,
         )
 
         with patch.object(client._limiter, "acquire", new_callable=AsyncMock) as mock_acquire:
@@ -523,7 +560,7 @@ class TestRateLimiting:
             server="https://bc-server:7048",
             instance="BC210",
             auth=BasicAuth("user", "pass"),
-            rate_limit=None,
+            requests_per_minute=None,
         )
 
         # No limiter should exist
@@ -589,7 +626,7 @@ class TestGetBatch:
             server="https://bc-server:7048",
             instance="BC210",
             auth=BasicAuth("user", "pass"),
-            rate_limit=None,  # Disable for test speed
+            requests_per_minute=None,  # Disable for test speed
         )
 
         # Create mock response
@@ -625,7 +662,7 @@ class TestGetBatch:
             server="https://bc-server:7048",
             instance="BC210",
             auth=BasicAuth("user", "pass"),
-            rate_limit=None,
+            requests_per_minute=None,
         )
 
         mock_df = pl.DataFrame({"No": ["C001"], "Name": ["Test"]})
@@ -657,7 +694,7 @@ class TestGetBatch:
             server="https://bc-server:7048",
             instance="BC210",
             auth=BasicAuth("user", "pass"),
-            rate_limit=None,
+            requests_per_minute=None,
         )
 
         call_count = 0
@@ -691,7 +728,7 @@ class TestGetBatch:
             server="https://bc-server:7048",
             instance="BC210",
             auth=BasicAuth("user", "pass"),
-            rate_limit=None,
+            requests_per_minute=None,
         )
 
         async def mock_get(*args, **kwargs):

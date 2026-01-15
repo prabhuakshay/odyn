@@ -2,6 +2,16 @@
 
 All notable changes to Odyn will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING**: Renamed `rate_limit` parameter to `requests_per_minute` for clarity.
+- **Rate limiting**: Added `max_burst` parameter to control burst size (defaults to `max_connections`).
+  - Prevents hammering server on startup with 550 simultaneous requests.
+  - Rate limiter now initialized with burst-based token bucket configuration.
+- Moved rate limit check inside semaphore to avoid queuing up waiting requests.
+
 ## [0.3.0] - 2026-01-09
 
 ### Changed
