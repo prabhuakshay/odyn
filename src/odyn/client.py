@@ -45,7 +45,7 @@ import logging
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
 import httpx
 import polars as pl
@@ -75,7 +75,68 @@ if TYPE_CHECKING:
 
 __all__ = [
     "BCWebServiceClient",
+    "BatchProgressCallback",
+    "ProgressCallback",
 ]
+
+
+@runtime_checkable
+class ProgressCallback(Protocol):
+    """Protocol for progress callbacks during pagination.
+
+    Example:
+        >>> def on_progress(*, page, records_on_page, total_records, is_final):
+        ...     print(f"Page {page}: {records_on_page} records (total: {total_records})")
+    """
+
+    def __call__(
+        self,
+        *,
+        page: int,
+        records_on_page: int,
+        total_records: int,
+        is_final: bool,
+    ) -> None:
+        """Called after each page is fetched.
+
+        Args:
+            page: Current page number (1-indexed).
+            records_on_page: Number of records on this page.
+            total_records: Cumulative records fetched so far.
+            is_final: True if this is the last page.
+        """
+        ...
+
+
+@runtime_checkable
+class BatchProgressCallback(Protocol):
+    """Protocol for batch progress callbacks.
+
+    Example:
+        >>> def on_progress(*, batch, total_batches, successful, failed, is_final):
+        ...     print(f"Batch {batch}/{total_batches}: {successful} ok, {failed} failed")
+    """
+
+    def __call__(
+        self,
+        *,
+        batch: int,
+        total_batches: int,
+        successful: int,
+        failed: int,
+        is_final: bool,
+    ) -> None:
+        """Called after each batch completes.
+
+        Args:
+            batch: Current batch number (1-indexed).
+            total_batches: Total number of batches.
+            successful: Number of successful batches so far.
+            failed: Number of failed batches so far.
+            is_final: True if this is the last batch.
+        """
+        ...
+
 
 # Create a logger for the client
 logger = logging.getLogger("odyn.client")
@@ -641,12 +702,15 @@ class BCWebServiceClient:
         self,
         url: str,
         params: dict[str, str] | None = None,
+        *,
+        on_progress: ProgressCallback | None = None,
     ) -> pl.DataFrame:
         """Fetch all pages of results, following @odata.nextLink.
 
         Args:
             url: The initial URL to fetch.
             params: Optional query parameters for the first request.
+            on_progress: Optional callback invoked after each page is fetched.
 
         Returns:
             A Polars DataFrame containing all records from all pages.
@@ -655,16 +719,29 @@ class BCWebServiceClient:
         current_url = url
         current_params = params
         page = 0
+        total_records = 0
 
         while current_url and page < self.max_pages:
             data = await self._fetch_page(current_url, current_params)
             records = data.get("value", [])
+            records_count = len(records)
 
             if records:
                 frames.append(pl.DataFrame(records))
-                logger.debug("Page %d: %d records", page + 1, len(records))
+                total_records += records_count
+                logger.debug("Page %d: %d records", page + 1, records_count)
 
             next_link = data.get("@odata.nextLink")
+            is_final = not next_link or page + 1 >= self.max_pages
+
+            if on_progress is not None:
+                on_progress(
+                    page=page + 1,
+                    records_on_page=records_count,
+                    total_records=total_records,
+                    is_final=is_final,
+                )
+
             if next_link:
                 current_url = next_link
                 current_params = None  # nextLink includes all params
@@ -691,6 +768,8 @@ class BCWebServiceClient:
         self,
         url: str,
         params: dict[str, str] | None = None,
+        *,
+        on_progress: ProgressCallback | None = None,
     ) -> AsyncIterator[pl.DataFrame]:
         """Stream pages of results as individual DataFrames.
 
@@ -700,6 +779,7 @@ class BCWebServiceClient:
         Args:
             url: The initial URL to fetch.
             params: Optional query parameters for the first request.
+            on_progress: Optional callback invoked after each page is fetched.
 
         Yields:
             Polars DataFrame for each page of results.
@@ -707,16 +787,29 @@ class BCWebServiceClient:
         current_url = url
         current_params = params
         page = 0
+        total_records = 0
 
         while current_url and page < self.max_pages:
             data = await self._fetch_page(current_url, current_params)
             records = data.get("value", [])
+            records_count = len(records)
 
             if records:
-                logger.debug("Streaming page %d: %d records", page + 1, len(records))
+                total_records += records_count
+                logger.debug("Streaming page %d: %d records", page + 1, records_count)
                 yield pl.DataFrame(records)
 
             next_link = data.get("@odata.nextLink")
+            is_final = not next_link or page + 1 >= self.max_pages
+
+            if on_progress is not None:
+                on_progress(
+                    page=page + 1,
+                    records_on_page=records_count,
+                    total_records=total_records,
+                    is_final=is_final,
+                )
+
             if next_link:
                 current_url = next_link
                 current_params = None
@@ -732,6 +825,7 @@ class BCWebServiceClient:
         query: ODataQuery | None = None,
         paginate: bool = True,
         use_cache: bool = True,
+        on_progress: ProgressCallback | None = None,
     ) -> pl.DataFrame:
         """Fetch data from a Business Central web service endpoint.
 
@@ -740,6 +834,7 @@ class BCWebServiceClient:
             query: Optional ODataQuery for filtering, sorting, etc.
             paginate: Whether to auto-fetch all pages (default: True).
             use_cache: Whether to use cache if available (default: True).
+            on_progress: Optional callback invoked after each page is fetched.
 
         Returns:
             Polars DataFrame with the results.
@@ -757,6 +852,11 @@ class BCWebServiceClient:
             >>>
             >>> # Force refresh (skip cache)
             >>> df = await client.get("customers", use_cache=False)
+            >>>
+            >>> # With progress callback
+            >>> def on_progress(*, page, records_on_page, total_records, is_final):
+            ...     print(f"Page {page}: {total_records} total records")
+            >>> df = await client.get("customers", on_progress=on_progress)
         """
         url = self._build_url(endpoint)
         params = query.build() if query else None
@@ -775,11 +875,19 @@ class BCWebServiceClient:
 
         # Fetch from API
         if paginate:
-            df = await self._paginate(url, params)
+            df = await self._paginate(url, params, on_progress=on_progress)
         else:
             data = await self._fetch_page(url, params)
             records = data.get("value", [])
             df = pl.DataFrame(records) if records else pl.DataFrame()
+            # Call progress callback for single-page fetch
+            if on_progress is not None:
+                on_progress(
+                    page=1,
+                    records_on_page=len(records),
+                    total_records=len(records),
+                    is_final=True,
+                )
 
         # Store in cache
         if self.cache and use_cache and not df.is_empty():
@@ -793,6 +901,7 @@ class BCWebServiceClient:
         endpoint: str,
         *,
         query: ODataQuery | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> AsyncIterator[pl.DataFrame]:
         """Stream data from an endpoint page by page.
 
@@ -803,6 +912,7 @@ class BCWebServiceClient:
         Args:
             endpoint: OData entity set name.
             query: Optional ODataQuery for filtering, sorting, etc.
+            on_progress: Optional callback invoked after each page is fetched.
 
         Yields:
             Polars DataFrame for each page of results.
@@ -810,13 +920,19 @@ class BCWebServiceClient:
         Example:
             >>> async for page in client.get_stream("largeDataset"):
             ...     process_chunk(page)
+            >>>
+            >>> # With progress callback
+            >>> def on_progress(*, page, records_on_page, total_records, is_final):
+            ...     print(f"Page {page}: {total_records} total records")
+            >>> async for page in client.get_stream("largeDataset", on_progress=on_progress):
+            ...     process_chunk(page)
         """
         url = self._build_url(endpoint)
         params = query.build() if query else None
 
         logger.info("GET STREAM %s params=%s", endpoint, params)
 
-        async for page in self._paginate_stream(url, params):
+        async for page in self._paginate_stream(url, params, on_progress=on_progress):
             yield page
 
     async def get_by_key(
@@ -1033,6 +1149,7 @@ class BCWebServiceClient:
         additional_filter: FilterExpression | None = None,
         fail_fast: bool = False,
         use_cache: bool = True,
+        on_progress: BatchProgressCallback | None = None,
     ) -> pl.DataFrame:
         """Fetch records matching a list of values using concurrent batch requests.
 
@@ -1054,6 +1171,7 @@ class BCWebServiceClient:
             additional_filter: Optional additional filter expression to AND with is_in.
             fail_fast: If True, raise on first error. If False, continue and log errors.
             use_cache: Whether to use cached results (default: True).
+            on_progress: Optional callback invoked after each batch completes.
 
         Returns:
             Polars DataFrame with all matching records from all batches.
@@ -1081,26 +1199,40 @@ class BCWebServiceClient:
             ...     values=customer_ids,
             ...     additional_filter=(F.Blocked == False),
             ... )
+
+            >>> # With progress callback
+            >>> def on_progress(*, batch, total_batches, successful, failed, is_final):
+            ...     print(f"Batch {batch}/{total_batches}: {successful} ok, {failed} failed")
+            >>> customers = await client.get_batch("customers", "No", customer_ids, on_progress=on_progress)
         """
         if not values:
             raise ValueError("values list cannot be empty")
 
         # Chunk values into batches
         batches = [values[i : i + batch_size] for i in range(0, len(values), batch_size)]
+        total_batches = len(batches)
 
         logger.info(
             "Batch fetch: endpoint=%s, field=%s, total_values=%d, batches=%d, batch_size=%d",
             endpoint,
             field,
             len(values),
-            len(batches),
+            total_batches,
             batch_size,
         )
 
         field_ref = Field(field)
 
+        # Track progress across batches
+        completed_count = 0
+        successful_count = 0
+        failed_count = 0
+        progress_lock = asyncio.Lock()
+
         async def fetch_one_batch(batch_values: list[Any]) -> pl.DataFrame | None:
             """Fetch a single batch of values."""
+            nonlocal completed_count, successful_count, failed_count
+
             # Build query with is_in filter
             query = ODataQuery().filter(field_ref.is_in(batch_values))
 
@@ -1116,13 +1248,17 @@ class BCWebServiceClient:
             if order_by:
                 query = query.order_by(*order_by)
 
+            result: pl.DataFrame | None = None
+            success = False
+
             try:
-                return await self.get(
+                result = await self.get(
                     endpoint,
                     query=query,
                     paginate=True,
                     use_cache=use_cache,
                 )
+                success = True
             except Exception as e:
                 if fail_fast:
                     raise
@@ -1131,7 +1267,24 @@ class BCWebServiceClient:
                     len(batch_values),
                     e,
                 )
-                return None
+
+            # Update progress counters and invoke callback
+            if on_progress is not None:
+                async with progress_lock:
+                    completed_count += 1
+                    if success:
+                        successful_count += 1
+                    else:
+                        failed_count += 1
+                    on_progress(
+                        batch=completed_count,
+                        total_batches=total_batches,
+                        successful=successful_count,
+                        failed=failed_count,
+                        is_final=completed_count == total_batches,
+                    )
+
+            return result
 
         # Run all batches concurrently
         # Rate limiting and semaphore are applied automatically in _request

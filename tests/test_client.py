@@ -1,6 +1,5 @@
 """Tests for the odyn.client module."""
 
-import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -774,3 +773,245 @@ class TestBCWebServiceClientMisc:
         client.cache = MagicMock()
         client.cache.size.return_value = 10
         assert client.cache_size == 10
+
+
+class TestProgressCallbacks:
+    """Tests for progress callback support in pagination and batch methods."""
+
+    @pytest.fixture
+    def client(self):
+        return BCWebServiceClient.create(
+            server="https://bc-server",
+            instance="BC",
+            auth=BasicAuth("user", "pass"),
+            max_pages=10,
+            requests_per_minute=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_paginate_calls_progress_callback(self, client):
+        """_paginate invokes progress callback for each page."""
+        progress_calls = []
+
+        def on_progress(*, page, records_on_page, total_records, is_final):
+            progress_calls.append(
+                {
+                    "page": page,
+                    "records_on_page": records_on_page,
+                    "total_records": total_records,
+                    "is_final": is_final,
+                }
+            )
+
+        async def mock_fetch_page(url, params=None):
+            if "page2" in url:
+                return {"value": [{"No": "C2"}]}
+            return {"value": [{"No": "C1"}], "@odata.nextLink": "http://bc-server/page2"}
+
+        with patch.object(client, "_fetch_page", side_effect=mock_fetch_page):
+            await client._paginate("http://test", on_progress=on_progress)
+
+        assert len(progress_calls) == 2
+        assert progress_calls[0] == {
+            "page": 1,
+            "records_on_page": 1,
+            "total_records": 1,
+            "is_final": False,
+        }
+        assert progress_calls[1] == {
+            "page": 2,
+            "records_on_page": 1,
+            "total_records": 2,
+            "is_final": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_paginate_progress_callback_final_on_max_pages(self, client):
+        """_paginate sets is_final=True when max_pages is reached."""
+        client.max_pages = 2
+        progress_calls = []
+
+        def on_progress(*, page, records_on_page, total_records, is_final):
+            progress_calls.append({"page": page, "is_final": is_final})
+
+        async def mock_fetch_page(url, params=None):
+            return {"value": [{"No": "C"}], "@odata.nextLink": "http://bc-server/next"}
+
+        with patch.object(client, "_fetch_page", side_effect=mock_fetch_page):
+            await client._paginate("http://test", on_progress=on_progress)
+
+        assert len(progress_calls) == 2
+        assert progress_calls[0]["is_final"] is False
+        assert progress_calls[1]["is_final"] is True
+
+    @pytest.mark.asyncio
+    async def test_paginate_stream_calls_progress_callback(self, client):
+        """_paginate_stream invokes progress callback for each page."""
+        progress_calls = []
+
+        def on_progress(*, page, records_on_page, total_records, is_final):
+            progress_calls.append(
+                {
+                    "page": page,
+                    "records_on_page": records_on_page,
+                    "total_records": total_records,
+                    "is_final": is_final,
+                }
+            )
+
+        async def mock_fetch_page(url, params=None):
+            if "page2" in url:
+                return {"value": [{"No": "C2"}, {"No": "C3"}]}
+            return {"value": [{"No": "C1"}], "@odata.nextLink": "http://bc-server/page2"}
+
+        with patch.object(client, "_fetch_page", side_effect=mock_fetch_page):
+            pages = [page async for page in client._paginate_stream("http://test", on_progress=on_progress)]
+
+        assert len(pages) == 2
+        assert len(progress_calls) == 2
+        assert progress_calls[0] == {
+            "page": 1,
+            "records_on_page": 1,
+            "total_records": 1,
+            "is_final": False,
+        }
+        assert progress_calls[1] == {
+            "page": 2,
+            "records_on_page": 2,
+            "total_records": 3,
+            "is_final": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_passes_progress_to_paginate(self, client):
+        """get() passes on_progress to _paginate."""
+        callback_invoked = []
+
+        def on_progress(*, page, records_on_page, total_records, is_final):
+            callback_invoked.append(page)
+
+        with patch.object(client, "_fetch_page", new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = {"value": [{"No": "C1"}]}
+            await client.get("customers", on_progress=on_progress)
+
+        assert callback_invoked == [1]
+
+    @pytest.mark.asyncio
+    async def test_get_no_paginate_calls_progress_once(self, client):
+        """get(paginate=False) still invokes progress callback."""
+        progress_calls = []
+
+        def on_progress(*, page, records_on_page, total_records, is_final):
+            progress_calls.append(
+                {
+                    "page": page,
+                    "records_on_page": records_on_page,
+                    "total_records": total_records,
+                    "is_final": is_final,
+                }
+            )
+
+        with patch.object(client, "_fetch_page", new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = {"value": [{"No": "C1"}, {"No": "C2"}]}
+            await client.get("customers", paginate=False, on_progress=on_progress)
+
+        assert len(progress_calls) == 1
+        assert progress_calls[0] == {
+            "page": 1,
+            "records_on_page": 2,
+            "total_records": 2,
+            "is_final": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_stream_passes_progress_callback(self, client):
+        """get_stream() passes on_progress to _paginate_stream."""
+        callback_invoked = []
+
+        def on_progress(*, page, records_on_page, total_records, is_final):
+            callback_invoked.append(page)
+
+        with patch.object(client, "_fetch_page", new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = {"value": [{"No": "C1"}]}
+            pages = [p async for p in client.get_stream("customers", on_progress=on_progress)]
+
+        assert callback_invoked == [1]
+        assert len(pages) == 1
+
+    @pytest.mark.asyncio
+    async def test_get_batch_calls_batch_progress_callback(self, client):
+        """get_batch() invokes BatchProgressCallback for each batch."""
+        progress_calls = []
+
+        def on_progress(*, batch, total_batches, successful, failed, is_final):
+            progress_calls.append(
+                {
+                    "batch": batch,
+                    "total_batches": total_batches,
+                    "successful": successful,
+                    "failed": failed,
+                    "is_final": is_final,
+                }
+            )
+
+        mock_df = pl.DataFrame({"No": ["C1"]})
+
+        with patch.object(client, "get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_df
+            await client.get_batch("customers", "No", ["C1", "C2", "C3"], batch_size=1, on_progress=on_progress)
+
+        # All 3 batches should trigger callbacks
+        assert len(progress_calls) == 3
+        # Due to concurrent execution, the order may vary, but final state should be correct
+        final_call = next(c for c in progress_calls if c["is_final"])
+        assert final_call["successful"] == 3
+        assert final_call["failed"] == 0
+        assert final_call["total_batches"] == 3
+
+    @pytest.mark.asyncio
+    async def test_get_batch_progress_tracks_failures(self, client):
+        """get_batch() progress callback tracks failed batches."""
+        progress_calls = []
+
+        def on_progress(*, batch, total_batches, successful, failed, is_final):
+            progress_calls.append(
+                {
+                    "batch": batch,
+                    "successful": successful,
+                    "failed": failed,
+                    "is_final": is_final,
+                }
+            )
+
+        mock_df = pl.DataFrame({"No": ["C1"]})
+
+        async def mock_get(*args, **kwargs):
+            query_str = str(kwargs.get("query", ""))
+            if "'C2'" in query_str:
+                raise RuntimeError("Batch failed")
+            return mock_df
+
+        with patch.object(client, "get", side_effect=mock_get):
+            await client.get_batch(
+                "customers", "No", ["C1", "C2", "C3"], batch_size=1, fail_fast=False, on_progress=on_progress
+            )
+
+        # Final call should show 1 failure
+        final_call = next(c for c in progress_calls if c["is_final"])
+        assert final_call["successful"] == 2
+        assert final_call["failed"] == 1
+
+    @pytest.mark.asyncio
+    async def test_paginate_empty_still_calls_progress(self, client):
+        """_paginate still calls progress even for empty pages."""
+        progress_calls = []
+
+        def on_progress(*, page, records_on_page, total_records, is_final):
+            progress_calls.append({"page": page, "records_on_page": records_on_page})
+
+        with patch.object(client, "_fetch_page", new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = {"value": []}
+            await client._paginate("http://test", on_progress=on_progress)
+
+        assert len(progress_calls) == 1
+        assert progress_calls[0] == {"page": 1, "records_on_page": 0}
