@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.0] - 2026-01-16
 
 - **BREAKING**: Renamed `rate_limit` to `requests_per_minute` for clarity
 - Added `max_burst` parameter to control burst size (defaults to `max_connections`)
