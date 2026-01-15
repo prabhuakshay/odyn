@@ -26,12 +26,28 @@ client = BCWebServiceClient.create(
 
 ## Management
 
+### Cache Statistics
+
+Monitor cache performance with the `cache_stats` property:
+
+```python
+stats = client.cache_stats
+print(f"Hits: {stats['hits']}, Misses: {stats['misses']}")
+print(f"Disk usage: {stats['disk_bytes'] / 1024:.1f} KB")
+```
+
+The stats include:
+- `hits`: Number of cache hits (data served from disk)
+- `misses`: Number of cache misses (data fetched from API)
+- `disk_bytes`: Total size of cached files on disk
+
 ### Cleaning Expired Entries
 
 You can manually trigger a cleanup of expired entries to save disk space.
 
 ```python
-client.cleanup_cache()
+removed = client.cleanup_cache()
+print(f"Removed {removed} expired entries")
 ```
 
 ### Clearing the Cache
@@ -39,7 +55,16 @@ client.cleanup_cache()
 To remove all cached data regardless of expiration:
 
 ```python
-client.clear_cache()
+removed = client.clear_cache()
+print(f"Cleared {removed} entries")
+```
+
+### Cache Size
+
+Check the number of entries in the cache:
+
+```python
+print(f"Cache contains {client.cache_size} entries")
 ```
 
 ## Advanced Usage

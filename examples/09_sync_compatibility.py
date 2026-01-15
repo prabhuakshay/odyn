@@ -1,25 +1,33 @@
-import asyncio
+from odyn import BasicAuth, BCWebServiceClientSync
 
-from odyn import BasicAuth, BCWebServiceClient
+# For non-async contexts (scripts, notebooks, Django views),
+# use BCWebServiceClientSync. It provides blocking versions
+# of all async methods.
 
 
-def get_data_sync():
-    """
-    If your application is not async, you can wrap Odyn calls
-    using asyncio.run(). Note that client.create() is a
-    classmethod but its context manager is async.
-    """
+def main():
+    # The sync client works as a context manager
+    with BCWebServiceClientSync.create(
+        server="https://bc-server:7048",
+        instance="BC240",
+        auth=BasicAuth("user", "pass"),
+    ) as client:
+        # All methods are blocking (no await needed)
+        customers = client.get("customers")
+        print(f"Found {len(customers)} customers")
 
-    async def _fetch():
-        async with BCWebServiceClient.create(
-            server="https://bc-server:7048", instance="BC240", auth=BasicAuth("user", "pass")
-        ) as client:
-            return await client.get("customers")
+        # Single record lookups
+        customer = client.get_by_key("customers", "10000")
+        print(f"Customer: {customer['Name']}")
 
-    # Run the async loop and wait for result
-    return asyncio.run(_fetch())
+        # Check existence
+        exists = client.exists("customers", "10000")
+        print(f"Customer 10000 exists: {exists}")
+
+        # Get record count
+        count = client.count("customers")
+        print(f"Total customers: {count}")
 
 
 if __name__ == "__main__":
-    df = get_data_sync()
-    print(df.head())
+    main()

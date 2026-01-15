@@ -25,6 +25,20 @@ async def main():
         # Force a fresh fetch from the server
         df3 = await client.get("customers", use_cache=False)
 
+        # Check cache statistics
+        stats = client.cache_stats
+        if stats:
+            print(f"Cache hits: {stats['hits']}")
+            print(f"Cache misses: {stats['misses']}")
+            print(f"Disk usage: {stats['disk_bytes'] / 1024:.1f} KB")
+
+        # Check number of cached entries
+        print(f"Entries in cache: {client.cache_size}")
+
+        # Clean up expired entries
+        removed = client.cleanup_cache()
+        print(f"Removed {removed} expired entries")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

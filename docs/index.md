@@ -27,7 +27,14 @@ For runnable scripts and advanced patterns, see the [examples/](../examples/) di
 ## Design Philosophy
 
 Odyn was built with a few core principles:
-1. **Async-First**: All network operations are asynchronous, leveraging `httpx`.
+1. **Async-First**: All network operations are asynchronous, leveraging `httpx`. A synchronous wrapper (`BCWebServiceClientSync`) is also available for non-async contexts.
 2. **Polars Integration**: Data is returned as Polars DataFrames for efficient processing.
 3. **Resilience**: Industry-standard retry and rate-limiting patterns are built-in.
 4. **Developer Experience**: A fluent, type-safe API reduces boilerplate and errors.
+
+## Recent Features
+
+- **Progress Callbacks**: Monitor pagination and batch operations with `on_progress` callbacks.
+- **Request/Response Hooks**: Attach custom logging or metrics to every HTTP request.
+- **Delta Sync**: Use `get_since()` and `get_before()` for incremental data synchronization.
+- **Sync Client**: Use `BCWebServiceClientSync` in non-async contexts (scripts, notebooks, Django).
