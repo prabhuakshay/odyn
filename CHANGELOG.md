@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.1] - 2026-02-14
 
 - Fixed duplicate log handlers when client is initialized multiple times
 
