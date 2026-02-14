@@ -219,7 +219,8 @@ def _configure_logging(
     # Configure the odyn logger
     odyn_logger = logging.getLogger("odyn")
     odyn_logger.setLevel(level)
-    odyn_logger.addHandler(handler)
+    if not odyn_logger.handlers:
+        odyn_logger.addHandler(handler)
     odyn_logger.propagate = False
 
 

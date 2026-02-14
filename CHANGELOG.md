@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Fixed duplicate log handlers when client is initialized multiple times
+
 ## [0.4.0] - 2026-01-16
 
 - **BREAKING**: Renamed `rate_limit` to `requests_per_minute` for clarity
