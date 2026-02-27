@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.4.2] - 2026-02-27
+
+- Fixed cache ignoring current `default_ttl` on reads — entries written without a TTL (or by a previous session) now correctly expire based on the cache's current `default_ttl`
+
 ## [0.4.1] - 2026-02-14
 
 - Fixed duplicate log handlers when client is initialized multiple times

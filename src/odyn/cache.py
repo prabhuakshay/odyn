@@ -172,6 +172,24 @@ class ParquetCache:
         """
         self._metadata_path(key).write_text(json.dumps(asdict(metadata)))
 
+    def _is_expired(self, metadata: CacheMetadata) -> bool:
+        """Check if a cache entry is expired.
+
+        An entry is expired if either its stored TTL or the cache's
+        default_ttl has been exceeded. This ensures that changing
+        default_ttl takes effect immediately for all entries, even
+        those written with a different (or no) TTL.
+
+        Args:
+            metadata: The metadata for the cache entry.
+
+        Returns:
+            True if the entry is expired, False otherwise.
+        """
+        if metadata.is_expired:
+            return True
+        return self._default_ttl is not None and metadata.age > self._default_ttl
+
     def get(self, key: str) -> pl.DataFrame | None:
         """Retrieve a cached DataFrame.
 
@@ -187,7 +205,7 @@ class ParquetCache:
             ...     print(f"Loaded {len(df)} rows from cache")
         """
         metadata = self._load_metadata(key)
-        if metadata is None or metadata.is_expired:
+        if metadata is None or self._is_expired(metadata):
             self._misses += 1
             return None
 
@@ -272,7 +290,7 @@ class ParquetCache:
             ...     df = cache.get(key)  # Guaranteed to succeed
         """
         metadata = self._load_metadata(key)
-        if metadata is None or metadata.is_expired:
+        if metadata is None or self._is_expired(metadata):
             return False
         return self._parquet_path(key).exists()
 
@@ -312,7 +330,7 @@ class ParquetCache:
         for metadata_file in self._cache_dir.glob("*.json"):
             key = metadata_file.stem
             metadata = self._load_metadata(key)
-            if metadata and metadata.is_expired:
+            if metadata and self._is_expired(metadata):
                 self.delete(key)
                 count += 1
         return count

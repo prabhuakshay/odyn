@@ -675,6 +675,111 @@ class TestCleanupMethod:
 
 
 # =============================================================================
+# default_ttl enforcement on read Tests
+# =============================================================================
+
+
+class TestDefaultTTLEnforcedOnRead:
+    """Test suite for default_ttl being enforced during reads.
+
+    When a cache is created with default_ttl, entries written without a TTL
+    (or with a longer TTL) should still expire based on the current default_ttl.
+    This handles the case where cached files on disk were written by a previous
+    session that used a different (or no) TTL setting.
+    """
+
+    @pytest.fixture
+    def sample_df(self) -> pl.DataFrame:
+        """Create a sample DataFrame for testing."""
+        return pl.DataFrame({"id": [1, 2, 3]})
+
+    def test_get_expires_entry_with_no_stored_ttl_when_default_ttl_set(
+        self, tmp_path: Path, sample_df: pl.DataFrame
+    ) -> None:
+        """Validate that default_ttl expires entries that have no stored TTL."""
+        cache_dir = tmp_path / "cache"
+
+        # First session: no TTL — entry stored with ttl_seconds=None
+        cache_v1 = ParquetCache(cache_dir)
+        cache_v1.set("key", sample_df, url="https://api.example.com")
+
+        metadata = cache_v1._load_metadata("key")
+        assert metadata is not None
+        assert metadata.ttl_seconds is None
+
+        # Simulate time passing
+        time.sleep(0.01)
+
+        # Second session: default_ttl=0 (immediate expiry)
+        cache_v2 = ParquetCache(cache_dir, default_ttl=0)
+        assert cache_v2.get("key") is None
+
+    def test_exists_respects_default_ttl_for_entries_without_stored_ttl(
+        self, tmp_path: Path, sample_df: pl.DataFrame
+    ) -> None:
+        """Validate that exists() respects default_ttl for old entries."""
+        cache_dir = tmp_path / "cache"
+
+        # Write entry without TTL
+        cache_v1 = ParquetCache(cache_dir)
+        cache_v1.set("key", sample_df, url="https://api.example.com")
+
+        time.sleep(0.01)
+
+        # Re-open with default_ttl
+        cache_v2 = ParquetCache(cache_dir, default_ttl=0)
+        assert cache_v2.exists("key") is False
+
+    def test_cleanup_removes_entries_expired_by_default_ttl(
+        self, tmp_path: Path, sample_df: pl.DataFrame
+    ) -> None:
+        """Validate that cleanup() removes entries expired by default_ttl."""
+        cache_dir = tmp_path / "cache"
+
+        # Write entry without TTL
+        cache_v1 = ParquetCache(cache_dir)
+        cache_v1.set("key", sample_df, url="https://api.example.com")
+
+        time.sleep(0.01)
+
+        # Re-open with default_ttl
+        cache_v2 = ParquetCache(cache_dir, default_ttl=0)
+        removed = cache_v2.cleanup()
+        assert removed == 1
+
+    def test_default_ttl_acts_as_ceiling_over_stored_ttl(
+        self, tmp_path: Path, sample_df: pl.DataFrame
+    ) -> None:
+        """Validate that default_ttl acts as a ceiling even when stored TTL is higher."""
+        cache_dir = tmp_path / "cache"
+
+        # Write entry with long TTL
+        cache_v1 = ParquetCache(cache_dir, default_ttl=3600)
+        cache_v1.set("key", sample_df, url="https://api.example.com")
+
+        time.sleep(0.01)
+
+        # Re-open with short default_ttl
+        cache_v2 = ParquetCache(cache_dir, default_ttl=0)
+        assert cache_v2.get("key") is None
+
+    def test_no_default_ttl_does_not_expire_entries(
+        self, tmp_path: Path, sample_df: pl.DataFrame
+    ) -> None:
+        """Validate that entries without TTL don't expire when default_ttl is None."""
+        cache_dir = tmp_path / "cache"
+
+        cache = ParquetCache(cache_dir)
+        cache.set("key", sample_df, url="https://api.example.com")
+
+        time.sleep(0.01)
+
+        # Re-open still without default_ttl
+        cache2 = ParquetCache(cache_dir)
+        assert cache2.get("key") is not None
+
+
+# =============================================================================
 # size() Method Tests
 # =============================================================================
 
