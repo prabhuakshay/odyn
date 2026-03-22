@@ -19,6 +19,8 @@ if TYPE_CHECKING:
     import httpx
 
 __all__ = [
+    "APIKeyAuth",
+    "AuthStrategy",
     "BasicAuth",
 ]
 
@@ -69,3 +71,58 @@ class BasicAuth:
     def __repr__(self) -> str:
         """Return a string representation hiding the password."""
         return f"BasicAuth(username={self.username!r}, password='***')"
+
+
+@dataclass(frozen=True, slots=True)
+class APIKeyAuth:
+    """API Key Authentication for Business Central web services.
+
+    Sends the API key via a custom HTTP header. By default, the key is sent
+    as a Bearer token in the Authorization header, but the header name can
+    be customized for deployments that expect a different header.
+
+    Attributes:
+        api_key: The API key value.
+        header_name: HTTP header name (default: "Authorization").
+        prefix: Value prefix (default: "Bearer"). Set to empty string for no prefix.
+
+    Example:
+        >>> auth = APIKeyAuth("my-secret-key")
+        >>> auth.auth_header
+        'Bearer my-secret-key'
+    """
+
+    api_key: str
+    header_name: str = "Authorization"
+    prefix: str = "Bearer"
+
+    @property
+    def auth_header(self) -> str:
+        """Generate the header value.
+
+        Returns:
+            The formatted auth header value.
+        """
+        if self.prefix:
+            return f"{self.prefix} {self.api_key}"
+        return self.api_key
+
+    def apply(self, request: httpx.Request) -> httpx.Request:
+        """Apply authentication to a request.
+
+        Args:
+            request: The httpx request to authenticate.
+
+        Returns:
+            The request with the auth header added.
+        """
+        request.headers[self.header_name] = self.auth_header
+        return request
+
+    def __repr__(self) -> str:
+        """Return a string representation hiding the API key."""
+        return f"APIKeyAuth(api_key='***', header_name={self.header_name!r})"
+
+
+AuthStrategy = BasicAuth | APIKeyAuth
+"""Type alias for supported authentication strategies."""

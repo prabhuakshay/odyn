@@ -56,7 +56,7 @@ Query Building:
     ... )
 """
 
-from odyn.auth import BasicAuth
+from odyn.auth import APIKeyAuth, AuthStrategy, BasicAuth
 from odyn.cache import CacheMetadata, ParquetCache
 from odyn.client import BCWebServiceClient
 from odyn.exceptions import (
@@ -77,6 +77,8 @@ from odyn.exceptions import (
 from odyn.sync import BCWebServiceClientSync
 
 __all__ = [
+    "APIKeyAuth",
+    "AuthStrategy",
     "AuthenticationError",
     "BCWebServiceClient",
     "BCWebServiceClientSync",

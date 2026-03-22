@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
     import polars as pl
 
-    from odyn.auth import BasicAuth
+    from odyn.auth import AuthStrategy
     from odyn.query import ODataQuery
     from odyn.query.expressions import FilterExpression
 
@@ -110,7 +110,7 @@ class BCWebServiceClientSync:
         cls,
         server: str,
         instance: str,
-        auth: BasicAuth,
+        auth: AuthStrategy,
         *,
         company: str | None = None,
         timeout: float = 30.0,
@@ -135,7 +135,7 @@ class BCWebServiceClientSync:
         Args:
             server: Server URL (e.g., "https://bc-server:7048").
             instance: BC instance name (e.g., "BC210").
-            auth: Authentication strategy (BasicAuth).
+            auth: Authentication strategy (BasicAuth or APIKeyAuth).
             company: Optional company name to scope all requests.
             timeout: Request timeout in seconds (default: 30).
             max_pages: Maximum pages to fetch during auto-pagination (default: 100).

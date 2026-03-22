@@ -71,7 +71,7 @@ from odyn.query import Field, ODataQuery
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from odyn.auth import BasicAuth
+    from odyn.auth import AuthStrategy
     from odyn.query.expressions import FilterExpression
 
 __all__ = [
@@ -234,7 +234,7 @@ class BCWebServiceClient:
 
     Attributes:
         base_url: The base URL for the BC web service.
-        auth: Authentication handler (BasicAuth).
+        auth: Authentication handler (BasicAuth or APIKeyAuth).
         company: Company name for scoping requests.
         timeout: Request timeout in seconds.
         max_pages: Maximum pages to fetch during auto-pagination.
@@ -259,7 +259,7 @@ class BCWebServiceClient:
     """
 
     base_url: str
-    auth: BasicAuth
+    auth: AuthStrategy
     company: str | None = None
     timeout: float = 30.0
     max_pages: int = 100
@@ -332,7 +332,7 @@ class BCWebServiceClient:
         cls,
         server: str,
         instance: str,
-        auth: BasicAuth,
+        auth: AuthStrategy,
         *,
         company: str | None = None,
         timeout: float = 30.0,
@@ -357,7 +357,7 @@ class BCWebServiceClient:
         Args:
             server: Server URL (e.g., "https://bc-server:7048" or "http://bc-server:7048").
             instance: BC instance name (e.g., "BC210", "BC230").
-            auth: Authentication strategy (BasicAuth).
+            auth: Authentication strategy (BasicAuth or APIKeyAuth).
             company: Optional company name to scope all requests.
             timeout: Request timeout in seconds (default: 30).
             max_pages: Maximum pages to fetch during auto-pagination (default: 100).
