@@ -52,6 +52,7 @@ import httpx
 import polars as pl
 from aiolimiter import AsyncLimiter
 
+from odyn.auth import APIKeyAuth, BasicAuth
 from odyn.cache import ParquetCache
 from odyn.exceptions import (
     AuthenticationError,
@@ -291,15 +292,20 @@ class BCWebServiceClient:
             max_keepalive_connections=self.max_connections,
         )
 
+        headers: dict[str, str] = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        if isinstance(self.auth, BasicAuth):
+            headers["Authorization"] = self.auth.auth_header
+        elif isinstance(self.auth, APIKeyAuth):
+            headers[self.auth.header_name] = self.auth.auth_header
+
         self._http = httpx.AsyncClient(
             timeout=httpx.Timeout(self.timeout),
             verify=self.verify_ssl,
             limits=limits,
-            headers={
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                "Authorization": self.auth.auth_header,
-            },
+            headers=headers,
         )
 
         # Initialize concurrency controls
