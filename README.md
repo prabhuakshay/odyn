@@ -1,30 +1,29 @@
 # Odyn
 
-Odyn is a modern, async-first Python client for Microsoft Dynamics 365 Business Central Web Services. It provides a high-level interface for extracting and interacting with data from Business Central using OData, handling the complexities of authentication, rate limiting, and data transformation.
+Async-first Python client for Microsoft Dynamics 365 Business Central on-premises OData Web Services. Returns native Polars DataFrames with built-in caching, rate limiting, retry logic, and a fluent query builder.
 
-## Project Scope
+> **Scope:** Odyn targets Business Central **OData Web Services** only. It is not designed for the standard Business Central API v2.0 endpoints.
 
-This project was designed for personal use and follows an opinionated structure. It currently supports Business Central **OData Web Services** specifically. It is not intended for use with the standard Business Central API v2.0 endpoints.
+## Why Odyn
 
-## Problem Solved
+Integrating with Business Central Web Services means dealing with NTLM/Basic auth, manual OData query strings, pagination loops, and converting JSON blobs into something useful. Odyn handles all of that behind a single async call that returns a Polars DataFrame.
 
-Integrating with Business Central Web Services often involves significant boilerplate for authentication, manual construction of OData queries, complex pagination logic, and data conversion. Odyn eliminates this overhead by providing a type-safe, fluent API that returns native Polars DataFrames, designed specifically for data engineering and high-performance integration tasks.
+- **Async + sync** — built on httpx; sync wrapper included for scripts and notebooks
+- **Polars DataFrames** — columnar, fast, zero-copy where possible
+- **Fluent query builder** — type-safe filters via the `F` singleton, method chaining, raw escape hatch
+- **Parquet caching** — local file cache with TTL, SHA256 keys, hit/miss stats
+- **Resilience** — exponential backoff with jitter, rate limiting via token bucket, concurrency control
+- **Batch operations** — concurrent chunked lookups with progress callbacks
+- **Delta sync** — `get_since()` / `get_before()` for incremental loads
+- **Streaming** — page-by-page async iteration for large datasets
+- **Hooks** — plug in request/response observers for logging, metrics, or tracing
 
-## Capabilities
+## Requirements
 
-* Async Execution: Built on httpx for high-performance asynchronous I/O.
-* Polars Integration: Native support for Polars DataFrames for efficient data processing.
-* Query Builder: Type-safe OData query builder with support for filters, expansions, and ordering.
-* Caching: Persistent Parquet-based caching with configurable TTL to reduce API load.
-* Resilience: Automatic retries with exponential backoff and configurable rate limiting (via aiolimiter).
-* Data Handling: Automatic pagination, streaming, and efficient batching for large datasets.
-
-## Dependencies
-
-* Python 3.12+
-* httpx
-* polars
-* aiolimiter
+- Python 3.12+
+- httpx >= 0.28
+- polars >= 1.36
+- aiolimiter >= 1.2
 
 ## Installation
 
@@ -32,7 +31,15 @@ Integrating with Business Central Web Services often involves significant boiler
 pip install odyn
 ```
 
-## Quick Example
+Or with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv add odyn
+```
+
+## Quick Start
+
+### Async
 
 ```python
 import asyncio
@@ -42,45 +49,145 @@ from odyn.query import ODataQuery, F
 async def main():
     async with BCWebServiceClient.create(
         server="https://bc-server:7048",
-        instance="BC200",
-        auth=BasicAuth("user", "password"),
-        company="CRONUS",
+        instance="BC210",
+        auth=BasicAuth("DOMAIN\\user", "password"),
+        company="CRONUS International Ltd.",
     ) as client:
-        # Fetch customers with balance > 1000
-        query = ODataQuery().filter(F.Balance > 1000)
-        df = await client.get("customers", query=query)
-        print(df)
+        # All customers as a Polars DataFrame
+        customers = await client.get("customers")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+        # Filtered query
+        query = (
+            ODataQuery()
+            .select("No", "Name", "Balance_LCY")
+            .filter(F.Balance_LCY > 1000)
+            .filter(F.Blocked == False)
+            .order_by("Balance_LCY desc")
+            .top(50)
+        )
+        top_customers = await client.get("customers", query=query)
+
+        # Single record by key
+        customer = await client.get_by_key("customers", "C00010")
+
+asyncio.run(main())
+```
+
+### Sync
+
+```python
+from odyn import BCWebServiceClientSync, BasicAuth
+
+with BCWebServiceClientSync.create(
+    server="https://bc-server:7048",
+    instance="BC210",
+    auth=BasicAuth("user", "password"),
+    company="CRONUS",
+) as client:
+    df = client.get("customers")
+    print(df)
+```
+
+### API Key Authentication
+
+```python
+from odyn import BCWebServiceClient, APIKeyAuth
+
+auth = APIKeyAuth("my-secret-api-key")
+
+# Or with a custom header
+auth = APIKeyAuth("my-key", header_name="X-API-Key", prefix="")
+```
+
+## Query Builder
+
+```python
+from odyn.query import ODataQuery, F
+
+query = (
+    ODataQuery()
+    .select("No", "Name", "Balance_LCY")
+    .filter(F.Status == "Active")          # eq
+    .filter(F.Balance_LCY > 1000)          # gt
+    .filter(F.Type.is_in(["Customer", "Vendor"]))  # IN via OR chain
+    .expand("SalesLines")
+    .order_by("Name asc")
+    .top(100)
+    .skip(50)
+)
+
+# Raw OData for functions not covered by the DSL
+query = ODataQuery().filter_raw("contains(Name, 'Corp')")
+
+# Combine expressions with & and |
+expr = (F.Status == "Active") & (F.Balance_LCY > 0)
+expr = (F.City == "London") | (F.City == "Berlin")
+```
+
+## Caching
+
+```python
+async with BCWebServiceClient.create(
+    server="https://bc-server:7048",
+    instance="BC210",
+    auth=BasicAuth("user", "pass"),
+    cache_dir="~/.cache/odyn",
+    cache_ttl=3600,  # 1 hour
+) as client:
+    df = await client.get("customers")                   # cache miss — fetches from API
+    df = await client.get("customers")                   # cache hit — reads Parquet
+    df = await client.get("customers", use_cache=False)  # force refresh
+
+    client.cleanup_cache()  # remove expired entries
+```
+
+## Batch Operations
+
+```python
+customer_ids = ["C001", "C002", ..., "C500"]
+
+df = await client.get_batch(
+    "customers",
+    field="No",
+    values=customer_ids,
+    batch_size=50,
+    select=["No", "Name", "Balance_LCY"],
+)
+```
+
+## Delta Sync
+
+```python
+from datetime import datetime, timedelta, timezone
+
+since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+updated = await client.get_since("customers", since)
+```
+
+## Streaming
+
+```python
+async for page in client.get_stream("largeDataset"):
+    process(page)  # each page is a Polars DataFrame
 ```
 
 ## Documentation
 
-Comprehensive documentation is available in the [docs/](docs/index.md) directory:
+Full documentation lives in [docs/](docs/index.md):
 
-* [API Reference](docs/api.md) — Detailed class and method reference.
-* [Client Configuration](docs/client.md) — Setting up the `BCWebServiceClient`.
-* [Authentication](docs/auth.md) — Configuring authentication for your environment.
-* [Query Builder](docs/query.md) — Building type-safe filters and expansions.
-* [Caching](docs/cache.md) — Improving performance with local Parquet caching.
-* [Exception Handling](docs/exceptions.md) — Understanding the error hierarchy.
-* [Troubleshooting](docs/troubleshooting.md) — Solutions for common BC integration issues.
-
-## Examples
-
-Refer to the [examples/](examples/) directory for functional examples covering various use cases:
-
-* **[Quickstart](examples/01_quickstart.py)**: Basic setup and simple GET request.
-* **[Query Builder](examples/02_query_builder.py)**: Filtering, selection, ordering, and expands.
-* **[Lookups](examples/03_lookups.py)**: Fetching single records by key or ID.
-* **[Batch Operations](examples/04_batch_operations.py)**: Concurrent lookups for multiple IDs.
-* **[Streaming](examples/05_streaming.py)**: Processing large datasets page-by-page.
-* **[Caching](examples/06_caching.py)**: Persistent Parquet-based caching.
-* **[Error Handling](examples/07_error_handling.py)**: Common exceptions and error patterns.
-* **[Configuration](examples/08_configuration.py)**: Advanced client settings (retries, rate limits).
-* **[Sync Compatibility](examples/09_sync_compatibility.py)**: Using Odyn in non-async applications.
-* **[Metadata](examples/10_metadata.py)**: Inspecting available endpoints and counts.
+| Guide | Description |
+|-------|-------------|
+| [Getting Started](docs/getting-started.md) | Installation, prerequisites, first connection |
+| [Client](docs/client.md) | Creating and configuring the client |
+| [Authentication](docs/auth.md) | BasicAuth, APIKeyAuth, custom headers |
+| [Query Builder](docs/query.md) | Filters, select, expand, order, the F singleton |
+| [Caching](docs/cache.md) | ParquetCache, TTL, cache management |
+| [Sync Client](docs/sync.md) | Synchronous wrapper for non-async contexts |
+| [Advanced](docs/advanced.md) | Hooks, streaming, batch ops, delta sync, concurrency |
+| [Exceptions](docs/exceptions.md) | Exception hierarchy and error handling |
+| [API Reference](docs/api.md) | Every class, method, parameter, and type |
+| [Troubleshooting](docs/troubleshooting.md) | Common issues and solutions |
+| [LLM Context](docs/llm-context.md) | Single-file complete reference for AI assistants |
 
 ## License
 

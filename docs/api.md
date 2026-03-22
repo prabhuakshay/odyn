@@ -1,349 +1,777 @@
 # API Reference
 
-This page provides a comprehensive reference for all public APIs in the Odyn library.
+Complete reference for every public class, method, parameter, type, and constant in Odyn.
 
 ---
 
-## Client Module (`odyn.client`)
+## odyn (top-level package)
 
-### `BCWebServiceClient`
+### Exports
 
-The main entry point for interacting with Business Central.
-
-#### `BCWebServiceClient.create(...)`
-
-Factory method to create a new client instance.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `server` | `str` | *required* | The base URL of the Business Central server (e.g., `https://bc.example.com`). |
-| `instance` | `str` | *required* | The Business Central instance name (e.g., `BC210`). |
-| `auth` | `BasicAuth` | *required* | An instance of `BasicAuth` for authentication. |
-| `company` | `str \| None` | `None` | Optional company name to scope all requests. |
-| `timeout` | `float` | `30.0` | Request timeout in seconds. |
-| `max_pages` | `int` | `100` | Maximum number of pages to fetch for paginated requests. |
-| `verify_ssl` | `bool` | `True` | Whether to verify SSL certificates. |
-| `cache_dir` | `Path \| str \| None` | `None` | Directory to store Parquet cache files. |
-| `cache_ttl` | `int \| None` | `None` | Default time-to-live for cache entries in seconds. |
-| `log_level` | `int` | `logging.INFO` | Logging level for the client. |
-| `max_retries` | `int` | `3` | Maximum number of retry attempts for transient errors. |
-| `retry_backoff` | `float` | `1.0` | Initial delay for exponential backoff. |
-| `max_connections` | `int` | `4` | Maximum number of concurrent connections in the pool. |
-| `requests_per_minute` | `float \| None` | `550.0` | Target requests per minute. Set to `None` to disable. |
-| `max_burst` | `int \| None` | `None` | Maximum burst size (defaults to `max_connections`). Prevents server hammering on startup. |
-| `on_request` | `RequestHook \| None` | `None` | Optional callback invoked before each HTTP request. |
-| `on_response` | `ResponseHook \| None` | `None` | Optional callback invoked after each HTTP response. |
-
-**Returns:** `BCWebServiceClient`
-
-#### `await get(...)`
-
-Fetches data from an OData endpoint.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `endpoint` | `str` | *required* | The OData entity set name. |
-| `query` | `ODataQuery \| None` | `None` | Optional query builder instance. |
-| `paginate` | `bool` | `True` | Whether to automatically follow next-page links. |
-| `use_cache` | `bool` | `True` | Whether to attempt to use or update the cache. |
-| `on_progress` | `ProgressCallback \| None` | `None` | Optional callback invoked after each page. |
-
-**Returns:** `polars.DataFrame`
-
-#### `get_stream(...)`
-
-Returns an async iterator that yields DataFrames page-by-page.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `endpoint` | `str` | *required* | The OData entity set name. |
-| `query` | `ODataQuery \| None` | `None` | Optional query builder instance. |
-| `on_progress` | `ProgressCallback \| None` | `None` | Optional callback invoked after each page. |
-
-**Returns:** `AsyncIterator[polars.DataFrame]`
-
-#### `await get_by_key(...)`
-
-Fetches a single record by its primary key.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `endpoint` | `str` | *required* | The OData entity set name. |
-| `key` | `str` | *required* | The primary key value. |
-| `select` | `list[str] \| None` | `None` | Optional list of fields to return. |
-
-**Returns:** `dict[str, Any]`
-
-#### `await get_by_id(...)`
-
-Fetches a single record by its `SystemId` (GUID).
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `endpoint` | `str` | *required* | The OData entity set name. |
-| `system_id` | `str` | *required* | The SystemId GUID. |
-| `select` | `list[str] \| None` | `None` | Optional list of fields to return. |
-
-**Returns:** `dict[str, Any]`
-
-#### `await count(...)`
-
-Returns the total number of records matching a query.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `endpoint` | `str` | *required* | The OData entity set name. |
-| `query` | `ODataQuery \| None` | `None` | Optional query builder instance. |
-
-**Returns:** `int`
-
-#### `await get_first(...)`
-
-Fetches the first record matching a query.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `endpoint` | `str` | *required* | The OData entity set name. |
-| `query` | `ODataQuery \| None` | `None` | Optional query builder instance. |
-
-**Returns:** `dict[str, Any] \| None`
-
-#### `await exists(...)`
-
-Checks if a record exists by primary key.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `endpoint` | `str` | *required* | The OData entity set name. |
-| `key` | `str` | *required* | The primary key value. |
-
-**Returns:** `bool`
-
-#### `await get_all(...)`
-
-Optimized method to fetch all records using large batches.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `endpoint` | `str` | *required* | The OData entity set name. |
-| `batch_size` | `int` | `1000` | Number of records to fetch per page. |
-
-**Returns:** `polars.DataFrame`
-
-#### `await get_batch(...)`
-
-Concurrent batch fetch for records matching a list of values.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `endpoint` | `str` | *required* | The OData entity set name. |
-| `field` | `str` | *required* | The field name to filter on. |
-| `values` | `list` | *required* | Values to match (e.g., list of IDs). |
-| `batch_size` | `int` | `50` | Values per concurrent request. |
-| `select` | `list[str] \| None` | `None` | Fields to return. |
-| `expand` | `list[str] \| None` | `None` | Related entities to expand. |
-| `order_by` | `list[str] \| None` | `None` | Sort order. |
-| `additional_filter` | `FilterExpression \| None` | `None` | Extra filter to AND with the IN-match. |
-| `fail_fast` | `bool` | `False` | Raise immediately on first batch failure. |
-| `use_cache` | `bool` | `True` | Whether to use the cache. |
-| `on_progress` | `BatchProgressCallback \| None` | `None` | Optional callback invoked after each batch. |
-
-**Returns:** `polars.DataFrame`
-
-#### `await get_since(...)`
-
-Fetches records modified since a timestamp (delta sync).
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `endpoint` | `str` | *required* | The OData entity set name. |
-| `timestamp` | `str` | *required* | ISO 8601 timestamp (e.g., `2024-01-15T10:30:00Z`). |
-| `query` | `ODataQuery \| None` | `None` | Optional additional query. |
-| `use_cache` | `bool` | `False` | Whether to cache results (default False for fresh data). |
-| `on_progress` | `ProgressCallback \| None` | `None` | Optional callback invoked after each page. |
-
-**Returns:** `polars.DataFrame`
-
-#### `await get_before(...)`
-
-Fetches records modified before a timestamp.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `endpoint` | `str` | *required* | The OData entity set name. |
-| `timestamp` | `str` | *required* | ISO 8601 timestamp (e.g., `2024-01-15T10:30:00Z`). |
-| `query` | `ODataQuery \| None` | `None` | Optional additional query. |
-| `use_cache` | `bool` | `True` | Whether to cache results (default True for historical data). |
-| `on_progress` | `ProgressCallback \| None` | `None` | Optional callback invoked after each page. |
-
-**Returns:** `polars.DataFrame`
-
-#### `await get_endpoints()`
-
-Lists all available OData entity sets on the server.
-
-**Returns:** `list[str]`
+```python
+from odyn import (
+    # Auth
+    APIKeyAuth,
+    AuthStrategy,
+    BasicAuth,
+    # Client
+    BCWebServiceClient,
+    BCWebServiceClientSync,
+    # Cache
+    CacheMetadata,
+    ParquetCache,
+    # Exceptions
+    AuthenticationError,
+    ForbiddenError,
+    NotFoundError,
+    OdynConnectionError,
+    OdynError,
+    OdynSSLError,
+    OdynTimeoutError,
+    QueryValidationError,
+    RateLimitError,
+    RetryExhaustedError,
+    ServerError,
+    ValidationError,
+    WebServiceError,
+)
+```
 
 ---
 
-## Authentication Module (`odyn.auth`)
+## odyn.auth
 
-### `BasicAuth`
+### BasicAuth
 
-Handles HTTP Basic Authentication.
+```python
+@dataclass(frozen=True, slots=True)
+class BasicAuth:
+    username: str
+    password: str
+```
 
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `username` | `str` | The username (including domain if required). |
-| `password` | `str` | The password (masked in `__repr__`). |
-| `auth_header` | `str` | (Property) The Base64 encoded `Authorization` header. |
+HTTP Basic Authentication for on-premises Business Central.
 
----
+| Member | Type | Description |
+|--------|------|-------------|
+| `username` | `str` | Username. Supports `DOMAIN\user`. |
+| `password` | `str` | Password. |
+| `auth_header` | `str` (property) | `"Basic {base64(user:pass)}"` |
+| `apply(request)` | `httpx.Request -> httpx.Request` | Adds Authorization header. |
+| `__repr__()` | `str` | `"BasicAuth(username='...', password='***')"` |
 
-## Query Module (`odyn.query`)
+### APIKeyAuth
 
-### `ODataQuery`
+```python
+@dataclass(frozen=True, slots=True)
+class APIKeyAuth:
+    api_key: str
+    header_name: str = "Authorization"
+    prefix: str = "Bearer"
+```
 
-Fluent builder for OData URL parameters.
+API Key Authentication.
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `select(*fields)` | `Self` | Selects specific fields to return. |
-| `filter(expression)` | `Self` | Adds a filter expression. Multiple calls are joined with `and`. |
-| `filter_raw(odata_str)` | `Self` | Adds a raw OData filter string. |
-| `expand(*relations)` | `Self` | Expands navigation properties. |
-| `order_by(*fields)` | `Self` | Sets the sort order (e.g., `"Name asc"`). |
-| `top(n)` | `Self` | Limits the number of records returned. |
-| `skip(n)` | `Self` | Skips the first `n` records. |
-| `count(include=True)` | `Self` | Includes the total count in the response. |
-| `build()` | `dict[str, str]` | Generates the dictionary of URL parameters. |
+| Member | Type | Description |
+|--------|------|-------------|
+| `api_key` | `str` | The API key value. |
+| `header_name` | `str` | HTTP header name (default: `"Authorization"`). |
+| `prefix` | `str` | Value prefix (default: `"Bearer"`). Empty string for no prefix. |
+| `auth_header` | `str` (property) | `"{prefix} {api_key}"` or `"{api_key}"` if prefix is empty. |
+| `apply(request)` | `httpx.Request -> httpx.Request` | Adds the auth header. |
+| `__repr__()` | `str` | `"APIKeyAuth(api_key='***', header_name='...')"` |
 
-### `F` (Field Proxy)
+### AuthStrategy
 
-A convenience object for creating `Field` instances via attribute access (e.g., `F.No`, `F.Name`).
+```python
+AuthStrategy = BasicAuth | APIKeyAuth
+```
 
-### `Field`
-
-Represents a field in a filter expression.
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `is_in(values)` | `FilterExpression` | Checks if the field value is in a list of values. |
-
-**Operators:** Supports `==`, `!=`, `<`, `<=`, `>`, `>=` returning `FilterExpression`.
-
----
-
-## Cache Module (`odyn.cache`)
-
-### `ParquetCache`
-
-Persistent storage for DataFrames.
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `get(key)` | `DataFrame \| None` | Retrieves a DataFrame from the cache. |
-| `set(key, df, ...)` | `None` | Saves a DataFrame to the cache. |
-| `delete(key)` | `bool` | Deletes a cache entry. |
-| `cleanup()` | `int` | Removes expired cache entries. |
-| `clear()` | `int` | Removes all cache entries. |
-| `size` | `int` | (Property) Number of entries in the cache. |
-| `stats()` | `dict[str, int]` | Returns cache statistics (hits, misses, disk_bytes). |
+Type alias for supported authentication strategies.
 
 ---
 
-## Exceptions Module (`odyn.exceptions`)
+## odyn.client
 
-| Exception | Base | Description |
-|-----------|------|-------------|
-| `OdynError` | `Exception` | Base class for all library exceptions. |
-| `OdynConnectionError` | `OdynError` | Network connection issues. |
-| `OdynTimeoutError` | `OdynConnectionError` | Request timed out. |
-| `OdynSSLError` | `OdynConnectionError` | SSL certificate verification failed. |
-| `WebServiceError` | `OdynError` | API returned a non-success status code. |
-| `AuthenticationError` | `WebServiceError` | HTTP 401 Unauthorized. |
-| `ForbiddenError` | `WebServiceError` | HTTP 403 Forbidden. |
-| `NotFoundError` | `WebServiceError` | HTTP 404 Not Found. |
-| `ValidationError` | `WebServiceError` | HTTP 400 Bad Request. |
-| `RateLimitError` | `WebServiceError` | HTTP 429 Too Many Requests. |
-| `ServerError` | `WebServiceError` | HTTP 5xx Server Error. |
-| `RetryExhaustedError` | `OdynError` | Max retries reached without success. |
-| `QueryValidationError` | `OdynError` | Invalid OData query construction. |
+### BCWebServiceClient
+
+```python
+@dataclass
+class BCWebServiceClient:
+    base_url: str
+    auth: AuthStrategy
+    company: str | None = None
+    timeout: float = 30.0
+    max_pages: int = 100
+    verify_ssl: bool = True
+    cache: ParquetCache | None = None
+    max_retries: int = 3
+    retry_backoff: float = 1.0
+    max_connections: int = 4
+    requests_per_minute: float | None = 550.0
+    max_burst: int | None = None
+    on_request: RequestHook | None = None
+    on_response: ResponseHook | None = None
+```
+
+#### create() — class method
+
+```python
+@classmethod
+def create(
+    cls,
+    server: str,
+    instance: str,
+    auth: AuthStrategy,
+    *,
+    company: str | None = None,
+    timeout: float = 30.0,
+    max_pages: int = 100,
+    verify_ssl: bool = True,
+    cache_dir: Path | str | None = None,
+    cache_ttl: int | None = None,
+    log_level: int = logging.INFO,
+    max_retries: int = 3,
+    retry_backoff: float = 1.0,
+    max_connections: int = 4,
+    requests_per_minute: float | None = 550.0,
+    max_burst: int | None = None,
+    on_request: RequestHook | None = None,
+    on_response: ResponseHook | None = None,
+) -> BCWebServiceClient
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `server` | `str` | — | Server URL (e.g., `"https://bc-server:7048"`) |
+| `instance` | `str` | — | BC instance name (e.g., `"BC210"`) |
+| `auth` | `AuthStrategy` | — | `BasicAuth` or `APIKeyAuth` |
+| `company` | `str \| None` | `None` | Company name for URL scoping |
+| `timeout` | `float` | `30.0` | HTTP timeout (seconds) |
+| `max_pages` | `int` | `100` | Max auto-pagination pages |
+| `verify_ssl` | `bool` | `True` | Verify SSL certificates |
+| `cache_dir` | `Path \| str \| None` | `None` | Cache directory path |
+| `cache_ttl` | `int \| None` | `None` | Cache TTL (seconds) |
+| `log_level` | `int` | `logging.INFO` | Logging level |
+| `max_retries` | `int` | `3` | Retry attempts for transient errors |
+| `retry_backoff` | `float` | `1.0` | Base backoff delay (seconds) |
+| `max_connections` | `int` | `4` | Max concurrent connections |
+| `requests_per_minute` | `float \| None` | `550.0` | Rate limit (`None` to disable) |
+| `max_burst` | `int \| None` | `None` | Burst size (defaults to `max_connections`) |
+| `on_request` | `RequestHook \| None` | `None` | Pre-request hook |
+| `on_response` | `ResponseHook \| None` | `None` | Post-response hook |
+
+#### get()
+
+```python
+async def get(
+    endpoint: str,
+    *,
+    query: ODataQuery | None = None,
+    paginate: bool = True,
+    use_cache: bool = True,
+    on_progress: ProgressCallback | None = None,
+) -> pl.DataFrame
+```
+
+Fetch data with automatic pagination and caching. Returns Polars DataFrame.
+
+#### get_stream()
+
+```python
+async def get_stream(
+    endpoint: str,
+    *,
+    query: ODataQuery | None = None,
+    on_progress: ProgressCallback | None = None,
+) -> AsyncIterator[pl.DataFrame]
+```
+
+Stream pages as individual DataFrames. No caching.
+
+#### get_by_key()
+
+```python
+async def get_by_key(
+    endpoint: str,
+    key: str,
+    *,
+    select: list[str] | None = None,
+) -> dict[str, Any]
+```
+
+Fetch single record by primary key. URL: `endpoint('{key}')`.
+
+#### get_by_id()
+
+```python
+async def get_by_id(
+    endpoint: str,
+    system_id: str,
+    *,
+    select: list[str] | None = None,
+) -> dict[str, Any]
+```
+
+Fetch single record by SystemId GUID. URL: `endpoint({system_id})`.
+
+#### count()
+
+```python
+async def count(
+    endpoint: str,
+    *,
+    query: ODataQuery | None = None,
+) -> int
+```
+
+Record count. Only `$filter` from the query is used.
+
+#### get_endpoints()
+
+```python
+async def get_endpoints() -> list[str]
+```
+
+List published web service endpoint names.
+
+#### get_first()
+
+```python
+async def get_first(
+    endpoint: str,
+    *,
+    query: ODataQuery | None = None,
+) -> dict[str, Any] | None
+```
+
+First matching record, or `None`.
+
+#### exists()
+
+```python
+async def exists(endpoint: str, key: str) -> bool
+```
+
+Check if record exists by primary key.
+
+#### get_since()
+
+```python
+async def get_since(
+    endpoint: str,
+    timestamp: str,
+    *,
+    query: ODataQuery | None = None,
+    use_cache: bool = False,
+    on_progress: ProgressCallback | None = None,
+) -> pl.DataFrame
+```
+
+Records where `SystemModifiedAt > timestamp`.
+
+#### get_before()
+
+```python
+async def get_before(
+    endpoint: str,
+    timestamp: str,
+    *,
+    query: ODataQuery | None = None,
+    use_cache: bool = True,
+    on_progress: ProgressCallback | None = None,
+) -> pl.DataFrame
+```
+
+Records where `SystemModifiedAt < timestamp`.
+
+#### get_all()
+
+```python
+async def get_all(
+    endpoint: str,
+    *,
+    batch_size: int = 1000,
+) -> pl.DataFrame
+```
+
+All records with `$top={batch_size}` for optimized page sizes.
+
+#### get_batch()
+
+```python
+async def get_batch(
+    endpoint: str,
+    field: str,
+    values: list[Any],
+    *,
+    batch_size: int = 50,
+    select: list[str] | None = None,
+    expand: list[str] | None = None,
+    order_by: list[str] | None = None,
+    additional_filter: FilterExpression | None = None,
+    fail_fast: bool = False,
+    use_cache: bool = True,
+    on_progress: BatchProgressCallback | None = None,
+) -> pl.DataFrame
+```
+
+Concurrent batch lookups. Chunks values, creates `is_in()` filters, runs concurrently.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `endpoint` | `str` | — | OData entity set name |
+| `field` | `str` | — | Field to filter on |
+| `values` | `list[Any]` | — | Values to match (non-empty) |
+| `batch_size` | `int` | `50` | Values per batch |
+| `select` | `list[str] \| None` | `None` | Fields to return |
+| `expand` | `list[str] \| None` | `None` | Relations to include |
+| `order_by` | `list[str] \| None` | `None` | Sort clauses |
+| `additional_filter` | `FilterExpression \| None` | `None` | Additional filter AND'd with is_in |
+| `fail_fast` | `bool` | `False` | Raise on first batch error |
+| `use_cache` | `bool` | `True` | Use cache |
+| `on_progress` | `BatchProgressCallback \| None` | `None` | Progress callback |
+
+#### Cache Methods
+
+| Member | Signature | Description |
+|--------|-----------|-------------|
+| `clear_cache()` | `() -> int` | Remove all entries |
+| `cleanup_cache()` | `() -> int` | Remove expired entries |
+| `cache_size` | `int` (property) | Entry count |
+| `cache_stats` | `dict[str, int] \| None` (property) | `{"hits", "misses", "disk_bytes"}` |
+
+#### Lifecycle
+
+| Member | Signature | Description |
+|--------|-----------|-------------|
+| `close()` | `async () -> None` | Close HTTP client |
+| `__aenter__()` | `async () -> Self` | Async context manager enter |
+| `__aexit__()` | `async (*args) -> None` | Async context manager exit |
+
+### Protocols
+
+#### ProgressCallback
+
+```python
+@runtime_checkable
+class ProgressCallback(Protocol):
+    def __call__(
+        self,
+        *,
+        page: int,
+        records_on_page: int,
+        total_records: int,
+        is_final: bool,
+    ) -> None: ...
+```
+
+#### BatchProgressCallback
+
+```python
+@runtime_checkable
+class BatchProgressCallback(Protocol):
+    def __call__(
+        self,
+        *,
+        batch: int,
+        total_batches: int,
+        successful: int,
+        failed: int,
+        is_final: bool,
+    ) -> None: ...
+```
+
+#### RequestHook
+
+```python
+@runtime_checkable
+class RequestHook(Protocol):
+    def __call__(
+        self,
+        *,
+        method: str,
+        url: str,
+        params: dict[str, str] | None,
+    ) -> None: ...
+```
+
+#### ResponseHook
+
+```python
+@runtime_checkable
+class ResponseHook(Protocol):
+    def __call__(
+        self,
+        *,
+        method: str,
+        url: str,
+        status_code: int,
+        duration_ms: float,
+    ) -> None: ...
+```
 
 ---
 
-## Sync Module (`odyn.sync`)
+## odyn.sync
 
-### `BCWebServiceClientSync`
+### BCWebServiceClientSync
 
-Synchronous wrapper for `BCWebServiceClient`. Provides blocking versions of all async methods, using a background thread with its own event loop.
+```python
+class BCWebServiceClientSync:
+    __slots__ = ("_client", "_loop", "_thread")
+```
 
-#### `BCWebServiceClientSync.create(...)`
+Synchronous wrapper. Runs async operations in a background thread. All methods mirror `BCWebServiceClient` but block.
 
-Factory method with identical parameters to `BCWebServiceClient.create()`.
+#### create() — class method
 
-**Returns:** `BCWebServiceClientSync`
+Same signature as `BCWebServiceClient.create()`. Returns `BCWebServiceClientSync`.
 
-All methods mirror `BCWebServiceClient` but block until completion:
+#### Methods
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `get(...)` | `DataFrame` | Blocking version of `await client.get()`. |
-| `get_stream(...)` | N/A | Not available (use async client for streaming). |
-| `get_by_key(...)` | `dict` | Blocking version of `await client.get_by_key()`. |
-| `get_by_id(...)` | `dict` | Blocking version of `await client.get_by_id()`. |
-| `count(...)` | `int` | Blocking version of `await client.count()`. |
-| `get_first(...)` | `dict \| None` | Blocking version of `await client.get_first()`. |
-| `exists(...)` | `bool` | Blocking version of `await client.exists()`. |
-| `get_since(...)` | `DataFrame` | Blocking version of `await client.get_since()`. |
-| `get_before(...)` | `DataFrame` | Blocking version of `await client.get_before()`. |
-| `get_all(...)` | `DataFrame` | Blocking version of `await client.get_all()`. |
-| `get_batch(...)` | `DataFrame` | Blocking version of `await client.get_batch()`. |
-| `close()` | `None` | Closes the client and background thread. |
+All have identical signatures to `BCWebServiceClient` except they return values directly instead of coroutines.
 
-Supports context manager protocol:
+| Method | Returns |
+|--------|---------|
+| `get(endpoint, *, query, paginate, use_cache, on_progress)` | `pl.DataFrame` |
+| `get_by_key(endpoint, key, *, select)` | `dict[str, Any]` |
+| `get_by_id(endpoint, system_id, *, select)` | `dict[str, Any]` |
+| `count(endpoint, *, query)` | `int` |
+| `get_endpoints()` | `list[str]` |
+| `get_first(endpoint, *, query)` | `dict[str, Any] \| None` |
+| `exists(endpoint, key)` | `bool` |
+| `get_since(endpoint, timestamp, *, ...)` | `pl.DataFrame` |
+| `get_before(endpoint, timestamp, *, ...)` | `pl.DataFrame` |
+| `get_all(endpoint, *, batch_size)` | `pl.DataFrame` |
+| `get_batch(endpoint, field, values, *, ...)` | `pl.DataFrame` |
+| `clear_cache()` | `int` |
+| `cleanup_cache()` | `int` |
+| `close()` | `None` |
+
+#### Properties
+
+| Property | Type |
+|----------|------|
+| `cache_size` | `int` |
+| `cache_stats` | `dict[str, int] \| None` |
+
+#### Context Manager
 
 ```python
 with BCWebServiceClientSync.create(...) as client:
     df = client.get("customers")
 ```
 
+Note: `get_stream()` is not available on the sync client.
+
 ---
 
-## Callback Protocols (`odyn.client`)
+## odyn.cache
 
-### `ProgressCallback`
-
-Protocol for pagination progress callbacks.
+### ParquetCache
 
 ```python
-def on_progress(*, page: int, records_on_page: int, total_records: int, is_final: bool) -> None:
-    ...
+class ParquetCache:
+    __slots__ = ("_cache_dir", "_default_ttl", "_hits", "_misses")
+
+    def __init__(self, cache_dir: Path, default_ttl: int | None = None) -> None
 ```
 
-### `BatchProgressCallback`
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cache_dir` | `Path` | — | Cache directory (auto-created) |
+| `default_ttl` | `int \| None` | `None` | Default TTL in seconds |
 
-Protocol for batch operation progress callbacks.
+| Method | Signature | Returns | Description |
+|--------|-----------|---------|-------------|
+| `get` | `(key: str)` | `pl.DataFrame \| None` | Get if valid, else `None` |
+| `set` | `(key, df, *, url, params=None, ttl_seconds=None)` | `None` | Store entry |
+| `delete` | `(key: str)` | `bool` | Remove entry |
+| `exists` | `(key: str)` | `bool` | Check if valid entry exists |
+| `clear` | `()` | `int` | Remove all entries |
+| `cleanup` | `()` | `int` | Remove expired entries |
+| `size` | `()` | `int` | Entry count |
+| `stats` | `()` | `dict[str, int]` | `{"hits", "misses", "disk_bytes"}` |
+| `make_key` | `(url, params=None)` | `str` | Static. SHA256 hash (64 hex chars) |
+| `__contains__` | `(key: str)` | `bool` | `key in cache` support |
+
+### CacheMetadata
 
 ```python
-def on_progress(*, batch: int, total_batches: int, successful: int, failed: int, is_final: bool) -> None:
-    ...
+@dataclass(slots=True)
+class CacheMetadata:
+    url: str
+    params: dict[str, str] | None
+    created_at: float
+    ttl_seconds: int | None
 ```
 
-### `RequestHook`
+| Property | Type | Description |
+|----------|------|-------------|
+| `is_expired` | `bool` | Whether stored TTL has elapsed |
+| `age` | `float` | Seconds since creation |
 
-Protocol for request hooks (called before each HTTP request).
+---
+
+## odyn.query
+
+### ODataQuery
 
 ```python
-def on_request(*, method: str, url: str, params: dict[str, str] | None) -> None:
-    ...
+@dataclass
+class ODataQuery:
+    _select: list[str]
+    _filters: list[FilterExpression]
+    _expand: list[str]
+    _order_by: list[str]
+    _top: int | None = None
+    _skip: int | None = None
+    _count: bool = False
 ```
 
-### `ResponseHook`
+| Method | Signature | OData param | Description |
+|--------|-----------|-------------|-------------|
+| `select` | `(*fields: str) -> Self` | `$select` | Fields to return |
+| `filter` | `(condition: FilterExpression) -> Self` | `$filter` | Add filter (AND'd) |
+| `filter_raw` | `(odata_string: str) -> Self` | `$filter` | Raw OData filter |
+| `expand` | `(*relations: str) -> Self` | `$expand` | Related entities |
+| `order_by` | `(*fields: str) -> Self` | `$orderby` | Sort order |
+| `top` | `(count: int) -> Self` | `$top` | Limit results |
+| `skip` | `(count: int) -> Self` | `$skip` | Skip results |
+| `count` | `(include: bool = True) -> Self` | `$count` | Include count |
+| `build` | `() -> dict[str, str]` | — | Build query params |
 
-Protocol for response hooks (called after each HTTP response).
+### Field
 
 ```python
-def on_response(*, method: str, url: str, status_code: int, duration_ms: float) -> None:
-    ...
+@dataclass(frozen=True, slots=True)
+class Field:
+    name: str
+```
+
+| Operator | OData | Returns |
+|----------|-------|---------|
+| `==` | `eq` | `Comparison` |
+| `!=` | `ne` | `Comparison` |
+| `>` | `gt` | `Comparison` |
+| `>=` | `ge` | `Comparison` |
+| `<` | `lt` | `Comparison` |
+| `<=` | `le` | `Comparison` |
+| `is_in(values)` | OR chain | `InList` |
+
+### F (singleton)
+
+```python
+F: Final[_FieldFactory] = _FieldFactory()
+```
+
+Creates `Field` objects via attribute access: `F.Name`, `F.Balance_LCY`, etc.
+
+---
+
+## odyn.query.expressions
+
+### FilterExpression (Protocol)
+
+```python
+@runtime_checkable
+class FilterExpression(Protocol):
+    def to_odata(self) -> str: ...
+```
+
+### Comparison
+
+```python
+@dataclass(frozen=True, slots=True)
+class Comparison:
+    field: str
+    operator: str    # eq, ne, gt, ge, lt, le
+    value: ODataValue
+```
+
+| Method | Returns |
+|--------|---------|
+| `to_odata()` | `str` — e.g., `"Name eq 'John'"` |
+| `& other` | `And` |
+| `\| other` | `Or` |
+
+### InList
+
+```python
+@dataclass(frozen=True, slots=True)
+class InList:
+    field: str
+    values: tuple[ODataValue, ...]
+```
+
+| Method | Returns |
+|--------|---------|
+| `to_odata()` | `str` — e.g., `"(Status eq 'A' or Status eq 'B')"` |
+| `& other` | `And` |
+| `\| other` | `Or` |
+
+### Raw
+
+```python
+@dataclass(frozen=True, slots=True)
+class Raw:
+    expression: str
+```
+
+Passthrough for OData syntax not covered by typed expressions.
+
+| Method | Returns |
+|--------|---------|
+| `to_odata()` | `str` — the expression as-is |
+| `& other` | `And` |
+| `\| other` | `Or` |
+
+### And
+
+```python
+@dataclass(frozen=True, slots=True)
+class And:
+    expressions: tuple[FilterExpression, ...]
+```
+
+Requires 2+ expressions. Chaining with `&` flattens.
+
+| Method | Returns |
+|--------|---------|
+| `to_odata()` | `str` — e.g., `"(A eq 1 and B eq 2)"` |
+| `& other` | `And` (flattened) |
+| `\| other` | `Or` |
+
+### Or
+
+```python
+@dataclass(frozen=True, slots=True)
+class Or:
+    expressions: tuple[FilterExpression, ...]
+```
+
+Requires 2+ expressions. Chaining with `|` flattens.
+
+| Method | Returns |
+|--------|---------|
+| `to_odata()` | `str` — e.g., `"(A eq 1 or B eq 2)"` |
+| `& other` | `And` |
+| `\| other` | `Or` (flattened) |
+
+---
+
+## odyn.query.types
+
+### ODataValue
+
+```python
+type ODataValue = str | int | float | bool | None | date | datetime
+```
+
+### VALID_OPERATORS
+
+```python
+VALID_OPERATORS: Final[frozenset[str]] = frozenset({"eq", "ne", "gt", "ge", "lt", "le"})
+```
+
+---
+
+## odyn.exceptions
+
+### OdynError
+
+```python
+class OdynError(Exception)
+```
+
+Base exception for all Odyn errors.
+
+### QueryValidationError
+
+```python
+class QueryValidationError(OdynError)
+```
+
+Invalid OData query construction.
+
+### ConnectionError
+
+```python
+class ConnectionError(OdynError):
+    url: str | None
+    original_error: Exception | None
+```
+
+### TimeoutError
+
+```python
+class TimeoutError(ConnectionError):
+    timeout: float | None
+```
+
+### SSLError
+
+```python
+class SSLError(ConnectionError)
+```
+
+### WebServiceError
+
+```python
+@dataclass
+class WebServiceError(OdynError):
+    message: str
+    status_code: int
+    url: str = ""
+    response_body: str = ""
+    odata_error: dict[str, Any] = field(default_factory=dict)
+```
+
+`str(e)` returns `"[{status_code}] {message}"`.
+
+### AuthenticationError
+
+```python
+class AuthenticationError(WebServiceError)  # 401
+```
+
+### ForbiddenError
+
+```python
+class ForbiddenError(WebServiceError)  # 403
+```
+
+### NotFoundError
+
+```python
+class NotFoundError(WebServiceError)  # 404
+```
+
+### ValidationError
+
+```python
+class ValidationError(WebServiceError)  # 400
+```
+
+### ServerError
+
+```python
+class ServerError(WebServiceError)  # 5xx
+```
+
+### RateLimitError
+
+```python
+@dataclass
+class RateLimitError(WebServiceError):
+    retry_after: float | None = None  # 429
+```
+
+### RetryExhaustedError
+
+```python
+class RetryExhaustedError(OdynError):
+    attempts: int
+    last_exception: Exception
 ```

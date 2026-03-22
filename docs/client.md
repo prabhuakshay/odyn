@@ -1,155 +1,376 @@
-# Client Guide
+# Client
 
-The `BCWebServiceClient` is the central component of Odyn. It manages the lifecycle of HTTP connections, handles authentication, provides automatic retry logic, and manages the caching of responses.
+`BCWebServiceClient` is the main entry point for interacting with Business Central Web Services. It handles HTTP requests, authentication, pagination, caching, retry logic, rate limiting, and concurrency control.
 
-## Initialization
+## Creating a Client
 
-The recommended way to initialize the client is using the `create()` factory method. This ensures that all components, including the internal `httpx.AsyncClient`, are properly configured.
+Always use the `create()` factory method. It builds the OData URL from server + instance and optionally sets up caching.
 
 ```python
 from odyn import BCWebServiceClient, BasicAuth
 
-client = BCWebServiceClient.create(
-    server="https://bc.example.com",
+async with BCWebServiceClient.create(
+    server="https://bc-server:7048",
     instance="BC210",
     auth=BasicAuth("user", "password"),
-    company="CRONUS",
+    company="CRONUS International Ltd.",
+) as client:
+    df = await client.get("customers")
+```
+
+### Factory Method Parameters
+
+```python
+BCWebServiceClient.create(
+    server: str,                              # Required. Server URL (e.g., "https://bc-server:7048")
+    instance: str,                            # Required. BC instance name (e.g., "BC210")
+    auth: AuthStrategy,                       # Required. BasicAuth or APIKeyAuth
+
+    # Scoping
+    company: str | None = None,               # Company name. Adds Company('...') to URLs.
+
+    # Timeouts & pagination
+    timeout: float = 30.0,                    # HTTP timeout in seconds
+    max_pages: int = 100,                     # Max pages to auto-paginate
+
+    # SSL
+    verify_ssl: bool = True,                  # Set False for self-signed certs
+
+    # Caching
+    cache_dir: Path | str | None = None,      # Enable Parquet cache at this directory
+    cache_ttl: int | None = None,             # Cache TTL in seconds (None = never expire)
+
+    # Logging
+    log_level: int = logging.INFO,            # Python logging level
+
+    # Retry
+    max_retries: int = 3,                     # Retry attempts for transient errors
+    retry_backoff: float = 1.0,               # Base delay for exponential backoff
+
+    # Concurrency & rate limiting
+    max_connections: int = 4,                  # Max concurrent HTTP connections
+    requests_per_minute: float | None = 550.0, # Rate limit (None = disabled)
+    max_burst: int | None = None,             # Burst size (defaults to max_connections)
+
+    # Hooks
+    on_request: RequestHook | None = None,     # Called before each HTTP request
+    on_response: ResponseHook | None = None,   # Called after each HTTP response
 )
 ```
 
-## Lifecycle Management
+### URL Construction
 
-### As a Context Manager
+The factory builds the base URL as `{server}/{instance}/ODataV4`. When `company` is set, endpoint URLs become:
 
-Using the client as an async context manager is the safest way to ensure that resources are cleaned up immediately after use.
-
-```python
-async with BCWebServiceClient.create(...) as client:
-    data = await client.get("customers")
-# Client is closed here
+```
+{server}/{instance}/ODataV4/Company('{company}')/{endpoint}
 ```
 
-### Manual Management
+## Core Methods
 
-In long-running scripts or applications where the client instance is shared (e.g., in a data pipeline), you can manage the lifecycle manually.
-
-```python
-client = BCWebServiceClient.create(...)
-
-# ... perform requests ...
-
-await client.close()
-```
-
-## Fetching Data
-
-### DataFrames
-
-The `get()` method is the primary way to fetch data. It returns a `polars.DataFrame`, which is highly efficient for data manipulation. Odyn handles the conversion from the OData JSON response to the DataFrame schema automatically.
-
-### Auto-Pagination
-
-By default, `get()` will follow `@odata.nextLink` pointers until all data has been fetched (up to `max_pages`). This allows you to fetch large datasets with a single method call without worrying about pagination logic.
-
-### Streaming
-
-For extremely large datasets that might not fit comfortably in memory, use `get_stream()`. This yields one DataFrame per page of results, allowing you to process data incrementally.
-
-## Resilience Features
-
-Odyn includes built-in features to make your integrations more robust:
-
-1. **Retries**: Automatically retries requests that fail due to network timeouts, connection issues, or transient server errors (5xx). It uses exponential backoff to avoid hammering the server.
-2. **Rate Limiting**: Throttles outgoing requests using aiolimiter (token bucket algorithm) to a specified number of requests per minute (RPM) to comply with server-side throughput limits. Default is 550 requests per minute.
-3. **Concurrency Control**: Limits the number of concurrent outgoing requests to prevent overwhelming the Business Central instance and to manage connection pooling efficiently.
-
-## Advanced Fetching
-
-### Efficient Batching (`get_batch`)
-
-Standard OData filters are restricted by URL length limits. If you need to fetch records matching a large list of IDs (e.g., 500 customer numbers), a single filter string would be too long.
-
-`client.get_batch()` solves this by:
-1. Chunks the input list into smaller groups (default 50).
-2. Executes requests concurrently (respecting `max_connections`).
-3. Merges all returned data into a single Polars DataFrame.
+### `get()` — Fetch data as a DataFrame
 
 ```python
-customers = await client.get_batch(
-    endpoint="customers",
-    field="No",
-    values=large_id_list
-)
+async def get(
+    endpoint: str,
+    *,
+    query: ODataQuery | None = None,
+    paginate: bool = True,
+    use_cache: bool = True,
+    on_progress: ProgressCallback | None = None,
+) -> pl.DataFrame
 ```
 
-### Delta Sync (`get_since`, `get_before`)
+The primary method. Fetches data from an endpoint, handles pagination, caching, and returns a Polars DataFrame.
 
-For incremental data synchronization, use the delta sync helpers:
+```python
+# All customers
+df = await client.get("customers")
+
+# With a query
+from odyn.query import ODataQuery, F
+query = ODataQuery().filter(F.Balance_LCY > 1000).top(50)
+df = await client.get("customers", query=query)
+
+# Skip cache
+df = await client.get("customers", use_cache=False)
+
+# Single page only
+df = await client.get("customers", paginate=False)
+```
+
+**Pagination:** When `paginate=True` (default), Odyn follows `@odata.nextLink` up to `max_pages` pages. All pages are concatenated into a single DataFrame using `pl.concat(..., how="diagonal_relaxed")`.
+
+**Caching:** When a `cache_dir` is configured and `use_cache=True`, results are cached as Parquet files. Cache hits return instantly without an HTTP request. Empty results are not cached.
+
+### `get_stream()` — Stream pages as DataFrames
+
+```python
+async def get_stream(
+    endpoint: str,
+    *,
+    query: ODataQuery | None = None,
+    on_progress: ProgressCallback | None = None,
+) -> AsyncIterator[pl.DataFrame]
+```
+
+Yields each page as a separate DataFrame. Use this for large datasets where you don't want everything in memory at once.
+
+```python
+async for page in client.get_stream("largeDataset"):
+    process(page)
+```
+
+Streaming bypasses caching.
+
+### `get_by_key()` — Fetch a single record by primary key
+
+```python
+async def get_by_key(
+    endpoint: str,
+    key: str,
+    *,
+    select: list[str] | None = None,
+) -> dict[str, Any]
+```
+
+Returns a dictionary for a single record.
+
+```python
+customer = await client.get_by_key("customers", "C00010")
+print(customer["Name"])
+
+# Select specific fields
+customer = await client.get_by_key("customers", "C00010", select=["No", "Name"])
+```
+
+### `get_by_id()` — Fetch by SystemId (GUID)
+
+```python
+async def get_by_id(
+    endpoint: str,
+    system_id: str,
+    *,
+    select: list[str] | None = None,
+) -> dict[str, Any]
+```
+
+```python
+customer = await client.get_by_id("customers", "12345678-1234-1234-1234-123456789012")
+```
+
+### `count()` — Get record count
+
+```python
+async def count(
+    endpoint: str,
+    *,
+    query: ODataQuery | None = None,
+) -> int
+```
+
+Only `$filter` from the query is sent to `/$count`.
+
+```python
+total = await client.count("customers")
+active = await client.count("customers", query=ODataQuery().filter(F.Status == "Active"))
+```
+
+### `get_endpoints()` — List available endpoints
+
+```python
+async def get_endpoints() -> list[str]
+```
+
+Queries the OData service document to discover published web services.
+
+```python
+endpoints = await client.get_endpoints()
+# ['customers', 'vendors', 'items', 'salesOrders', ...]
+```
+
+## Helper Methods
+
+### `get_first()` — First matching record
+
+```python
+async def get_first(
+    endpoint: str,
+    *,
+    query: ODataQuery | None = None,
+) -> dict[str, Any] | None
+```
+
+Returns the first record matching the query, or `None`.
+
+```python
+customer = await client.get_first("customers", query=ODataQuery().filter(F.Name == "John"))
+```
+
+### `exists()` — Check if a record exists
+
+```python
+async def exists(endpoint: str, key: str) -> bool
+```
+
+```python
+if await client.exists("customers", "C00010"):
+    print("Customer exists")
+```
+
+### `get_since()` — Records modified after a timestamp
+
+```python
+async def get_since(
+    endpoint: str,
+    timestamp: str,
+    *,
+    query: ODataQuery | None = None,
+    use_cache: bool = False,
+    on_progress: ProgressCallback | None = None,
+) -> pl.DataFrame
+```
+
+Adds `SystemModifiedAt gt {timestamp}` to the filter. Defaults to `use_cache=False` since you typically want fresh data for delta syncs.
 
 ```python
 from datetime import datetime, timedelta, timezone
-
-# Get records modified in the last hour
 since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
 updated = await client.get_since("customers", since)
+```
 
-# Get records not modified in the last 30 days
+### `get_before()` — Records modified before a timestamp
+
+```python
+async def get_before(
+    endpoint: str,
+    timestamp: str,
+    *,
+    query: ODataQuery | None = None,
+    use_cache: bool = True,
+    on_progress: ProgressCallback | None = None,
+) -> pl.DataFrame
+```
+
+Adds `SystemModifiedAt lt {timestamp}` to the filter.
+
+```python
 before = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
 stale = await client.get_before("customers", before)
 ```
 
-## Progress Tracking
-
-All fetching methods support progress callbacks for monitoring long-running operations:
+### `get_all()` — Fetch all records
 
 ```python
-def on_progress(*, page, records_on_page, total_records, is_final):
-    print(f"Page {page}: {total_records} records so far")
-
-df = await client.get("customers", on_progress=on_progress)
+async def get_all(
+    endpoint: str,
+    *,
+    batch_size: int = 1000,
+) -> pl.DataFrame
 ```
 
-For batch operations, use `BatchProgressCallback`:
+Fetches all records with `$top={batch_size}` for optimized page sizes.
 
 ```python
-def on_batch_progress(*, batch, total_batches, successful, failed, is_final):
-    print(f"Batch {batch}/{total_batches}")
-
-df = await client.get_batch("customers", "No", ids, on_progress=on_batch_progress)
+all_customers = await client.get_all("customers")
 ```
 
-## Request/Response Hooks
-
-For logging, metrics, or debugging, you can attach hooks to every HTTP request:
+### `get_batch()` — Concurrent batch lookups
 
 ```python
-def log_request(*, method, url, params):
-    print(f">> {method} {url}")
+async def get_batch(
+    endpoint: str,
+    field: str,
+    values: list[Any],
+    *,
+    batch_size: int = 50,
+    select: list[str] | None = None,
+    expand: list[str] | None = None,
+    order_by: list[str] | None = None,
+    additional_filter: FilterExpression | None = None,
+    fail_fast: bool = False,
+    use_cache: bool = True,
+    on_progress: BatchProgressCallback | None = None,
+) -> pl.DataFrame
+```
 
-def log_response(*, method, url, status_code, duration_ms):
-    print(f"<< {status_code} in {duration_ms:.0f}ms")
+Chunks `values` into batches, creates `is_in()` filters, and runs all batches concurrently (controlled by `max_connections` and `requests_per_minute`).
 
-client = BCWebServiceClient.create(
-    ...,
-    on_request=log_request,
-    on_response=log_response,
+```python
+customer_ids = ["C001", "C002", ..., "C500"]
+df = await client.get_batch(
+    "customers",
+    field="No",
+    values=customer_ids,
+    batch_size=50,
+    select=["No", "Name", "Balance_LCY"],
 )
 ```
 
-## Synchronous Client
+See [Advanced](advanced.md) for batch progress callbacks and error handling.
 
-For non-async contexts (scripts, notebooks, Django views), use `BCWebServiceClientSync`:
+## Cache Management
+
+These methods are available on the client when caching is enabled:
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `clear_cache()` | `int` | Remove all cache entries. Returns count. |
+| `cleanup_cache()` | `int` | Remove expired entries. Returns count. |
+| `cache_size` | `int` | Number of cached entries (property). |
+| `cache_stats` | `dict[str, int] \| None` | `{"hits": N, "misses": N, "disk_bytes": N}` or `None` if no cache. |
+
+## Lifecycle
+
+Use the client as an async context manager to ensure the HTTP connection pool is closed:
 
 ```python
-from odyn import BCWebServiceClientSync, BasicAuth
-
-with BCWebServiceClientSync.create(
-    server="https://bc.example.com",
-    instance="BC210",
-    auth=BasicAuth("user", "password"),
-) as client:
-    customers = client.get("customers")
-    print(f"Found {len(customers)} customers")
+async with BCWebServiceClient.create(...) as client:
+    # use client
+# HTTP connections are closed here
 ```
 
-The sync client mirrors all async methods as blocking calls.
+Or close manually:
+
+```python
+client = BCWebServiceClient.create(...)
+try:
+    df = await client.get("customers")
+finally:
+    await client.close()
+```
+
+## Retry Behavior
+
+Odyn retries on:
+- **Timeouts** (`TimeoutError`)
+- **Connection errors** (`ConnectionError`)
+- **Rate limits** (`RateLimitError` / HTTP 429) — respects `Retry-After` header
+- **Server errors** (`ServerError` / HTTP 5xx)
+
+Non-retryable (raised immediately):
+- `AuthenticationError` (401)
+- `ForbiddenError` (403)
+- `NotFoundError` (404)
+- `ValidationError` (400)
+- `SSLError`
+
+Backoff formula: `base_delay * 2^attempt + random_jitter`
+
+After all retries are exhausted, `RetryExhaustedError` is raised with the last exception attached.
+
+## Rate Limiting
+
+Uses a token-bucket algorithm (via `aiolimiter`):
+
+- `requests_per_minute=550.0` — sustained rate (default)
+- `max_burst=None` — defaults to `max_connections` to prevent startup hammering
+- Set `requests_per_minute=None` to disable
+
+Rate limiting is applied inside the concurrency semaphore to prevent queuing buildup.
+
+## Concurrency
+
+- `max_connections=4` — limits both the httpx connection pool and the asyncio semaphore
+- BC on-premises typically handles 4-10 concurrent connections well
+- `get_batch()` runs batches concurrently, bounded by these limits
