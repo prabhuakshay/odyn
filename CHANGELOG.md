@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0] - 2026-03-22
+
+### Added
+- `APIKeyAuth` class for API key-based authentication with configurable header name and prefix
+- `AuthStrategy` type alias (`BasicAuth | APIKeyAuth`)
+
+### Changed
+- `APIKeyAuth` defaults to `X-API-Key` header with no prefix (instead of `Authorization: Bearer`)
+- Rewrote all documentation: README, API reference, and all guides
+- Added new doc pages: Getting Started, Sync Client, Advanced Usage
+
 ## [0.4.2] - 2026-02-27
 
 - Fixed cache ignoring current `default_ttl` on reads — entries written without a TTL (or by a previous session) now correctly expire based on the cache's current `default_ttl`
