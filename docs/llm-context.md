@@ -64,18 +64,18 @@ auth.auth_header  # "Basic RE9NQUlOXHVzZXI6cGFzc3dvcmQ="
 ```python
 from odyn import APIKeyAuth
 
-# Default: Bearer token in Authorization header
+# Default: plain key in X-API-Key header
 auth = APIKeyAuth(api_key="my-key")
-# Header: Authorization: Bearer my-key
-
-# Custom header, no prefix
-auth = APIKeyAuth(api_key="my-key", header_name="X-API-Key", prefix="")
 # Header: X-API-Key: my-key
+
+# Bearer token in Authorization header
+auth = APIKeyAuth(api_key="my-key", header_name="Authorization", prefix="Bearer")
+# Header: Authorization: Bearer my-key
 ```
 
 - `api_key: str`
-- `header_name: str = "Authorization"`
-- `prefix: str = "Bearer"` — set `""` for no prefix
+- `header_name: str = "X-API-Key"`
+- `prefix: str = ""` — set e.g. `"Bearer"` to prepend
 - `auth_header: str` (property) — `"{prefix} {api_key}"` or just `"{api_key}"`
 - `apply(request: httpx.Request) -> httpx.Request`
 - `__repr__` hides key: `APIKeyAuth(api_key='***', header_name='...')`

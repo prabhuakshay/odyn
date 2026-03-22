@@ -66,8 +66,8 @@ HTTP Basic Authentication for on-premises Business Central.
 @dataclass(frozen=True, slots=True)
 class APIKeyAuth:
     api_key: str
-    header_name: str = "Authorization"
-    prefix: str = "Bearer"
+    header_name: str = "X-API-Key"
+    prefix: str = ""
 ```
 
 API Key Authentication.
@@ -75,8 +75,8 @@ API Key Authentication.
 | Member | Type | Description |
 |--------|------|-------------|
 | `api_key` | `str` | The API key value. |
-| `header_name` | `str` | HTTP header name (default: `"Authorization"`). |
-| `prefix` | `str` | Value prefix (default: `"Bearer"`). Empty string for no prefix. |
+| `header_name` | `str` | HTTP header name (default: `"X-API-Key"`). |
+| `prefix` | `str` | Value prefix (default: `""`). Set e.g. `"Bearer"` to prepend. |
 | `auth_header` | `str` (property) | `"{prefix} {api_key}"` or `"{api_key}"` if prefix is empty. |
 | `apply(request)` | `httpx.Request -> httpx.Request` | Adds the auth header. |
 | `__repr__()` | `str` | `"APIKeyAuth(api_key='***', header_name='...')"` |

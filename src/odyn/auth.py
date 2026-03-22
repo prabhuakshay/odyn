@@ -78,23 +78,23 @@ class APIKeyAuth:
     """API Key Authentication for Business Central web services.
 
     Sends the API key via a custom HTTP header. By default, the key is sent
-    as a Bearer token in the Authorization header, but the header name can
-    be customized for deployments that expect a different header.
+    as a plain value in the ``X-API-Key`` header, but both the header name
+    and an optional prefix can be customized.
 
     Attributes:
         api_key: The API key value.
-        header_name: HTTP header name (default: "Authorization").
-        prefix: Value prefix (default: "Bearer"). Set to empty string for no prefix.
+        header_name: HTTP header name (default: "X-API-Key").
+        prefix: Value prefix (default: ""). Set to a non-empty string to prepend (e.g. "Bearer").
 
     Example:
         >>> auth = APIKeyAuth("my-secret-key")
         >>> auth.auth_header
-        'Bearer my-secret-key'
+        'my-secret-key'
     """
 
     api_key: str
-    header_name: str = "Authorization"
-    prefix: str = "Bearer"
+    header_name: str = "X-API-Key"
+    prefix: str = ""
 
     @property
     def auth_header(self) -> str:

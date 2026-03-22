@@ -95,8 +95,8 @@ from odyn import BCWebServiceClient, APIKeyAuth
 
 auth = APIKeyAuth("my-secret-api-key")
 
-# Or with a custom header
-auth = APIKeyAuth("my-key", header_name="X-API-Key", prefix="")
+# Or with a Bearer token in the Authorization header
+auth = APIKeyAuth("my-key", header_name="Authorization", prefix="Bearer")
 ```
 
 ## Query Builder

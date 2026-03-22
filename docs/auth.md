@@ -77,8 +77,8 @@ from odyn import APIKeyAuth
 ```python
 APIKeyAuth(
     api_key: str,
-    header_name: str = "Authorization",
-    prefix: str = "Bearer",
+    header_name: str = "X-API-Key",
+    prefix: str = "",
 )
 ```
 
@@ -89,8 +89,8 @@ The dataclass is frozen (immutable) and uses `__slots__`.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `api_key` | `str` | — | The API key value. Required. |
-| `header_name` | `str` | `"Authorization"` | HTTP header name to use. |
-| `prefix` | `str` | `"Bearer"` | Prefix before the key value. Set to `""` for no prefix. |
+| `header_name` | `str` | `"X-API-Key"` | HTTP header name to use. |
+| `prefix` | `str` | `""` | Prefix before the key value. Set to e.g. `"Bearer"` to prepend. |
 
 ### Properties
 
@@ -107,21 +107,21 @@ The dataclass is frozen (immutable) and uses `__slots__`.
 ### Examples
 
 ```python
-# Default: Bearer token in Authorization header
+# Default: plain key in X-API-Key header
 auth = APIKeyAuth("my-secret-key")
-# Header: Authorization: Bearer my-secret-key
-
-# Custom header name, no prefix
-auth = APIKeyAuth("my-secret-key", header_name="X-API-Key", prefix="")
 # Header: X-API-Key: my-secret-key
+
+# Bearer token in Authorization header
+auth = APIKeyAuth("my-secret-key", header_name="Authorization", prefix="Bearer")
+# Header: Authorization: Bearer my-secret-key
 
 # Custom prefix
 auth = APIKeyAuth("my-secret-key", prefix="ApiKey")
-# Header: Authorization: ApiKey my-secret-key
+# Header: X-API-Key: ApiKey my-secret-key
 
 # Safe repr (key hidden)
 print(auth)
-# APIKeyAuth(api_key='***', header_name='Authorization')
+# APIKeyAuth(api_key='***', header_name='X-API-Key')
 ```
 
 ## Using Auth with the Client
