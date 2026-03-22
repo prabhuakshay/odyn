@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.1] - 2026-03-23
+
+### Fixed
+- `APIKeyAuth` now sends the key in the correct header (e.g. `X-API-Key`) instead of always using `Authorization`
+
 ## [0.5.0] - 2026-03-22
 
 ### Added
